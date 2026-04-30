@@ -20,6 +20,9 @@ list_envs = "isaac_so_arm101.scripts.list_envs:main"
 zero_agent = "isaac_so_arm101.scripts.zero_agent:main"
 random_agent = "isaac_so_arm101.scripts.random_agent:main"
 
+[tool.uv.extra-build-dependencies]
+flatdict = ["setuptools"]
+
 [tool.uv]
 index-strategy = "unsafe-best-match"
 environments = [
