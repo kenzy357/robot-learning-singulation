@@ -34,6 +34,12 @@ from isaaclab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg, UsdF
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
+## added for pick and place
+from isaaclab.sensors import TiledCameraCfg
+from isaaclab.utils.math import quat_from_euler_xyz                                                                                                
+import torch  
+
+
 # from isaaclab.utils.offset import OffsetCfg
 # from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 # from isaaclab.utils.visualizer import FRAME_MARKER_CFG
@@ -43,6 +49,22 @@ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 ##
 # Scene definition
 ##
+def euler_to_quat(x, y, z, device="cpu"):
+    z-=90
+    r = torch.deg2rad(torch.tensor([[x, y, z]], dtype=torch.float32, device=device))
+    q = quat_from_euler_xyz(r[:, 0], r[:, 1], r[:, 2])
+    return tuple(q.squeeze().tolist())
+CAMERA_ROT = euler_to_quat(0.0, 111.0, 0.0)
+CAMERA_POS = (0.0, 0.035, 0.082)
+
+_MARKER_HEIGHT = 0.025                                                                                                                             
+_TIP_HEIGHT = 0.010
+                                                                                                                                                     
+TIP_POS = (     
+    CAMERA_POS[0],
+    CAMERA_POS[1],                                                                                                                                 
+    CAMERA_POS[2] + _MARKER_HEIGHT / 2 + _TIP_HEIGHT / 2
+)   
 
 
 @configclass
@@ -80,6 +102,49 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
     )
 
 
+
+    # thin red cylinder so the camera location is visible in the Isaac Sim viewport
+    cam_marker: AssetBaseCfg = AssetBaseCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/wrist/cam_marker",
+        init_state=AssetBaseCfg.InitialStateCfg(pos=CAMERA_POS,
+                                                rot=CAMERA_ROT),
+        spawn=sim_utils.CylinderCfg(
+            radius=0.008,
+            height=0.025,
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0)),
+        ),
+    )
+    # black tip — 1 cm cap at the front (+Z of the body = optical axis direction)                                                                      
+    # child of cam_marker so it inherits rotation automatically; pos is in body-local frame                                                            
+    cam_marker_tip: AssetBaseCfg = AssetBaseCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/wrist/cam_marker/tip",                                                                                         
+        init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, 0.0175)),                                                                                
+        spawn=sim_utils.CylinderCfg(
+            radius=0.008,                                                                                                                              
+            height=0.010,                                                                                                                            
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.0, 0.0)),                                                                
+        ),                                                                                                                                             
+    )
+    
+    # wrist-mounted camera → feeds frozen ResNet18 encoder
+    wrist_camera: TiledCameraCfg = TiledCameraCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/wrist/wrist_cam",
+        update_period=0.0,
+        height=224, 
+        width=224,
+        data_types=["rgb"],
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=24.0,
+            focus_distance=400.0,
+            horizontal_aperture=20.955,
+            clipping_range=(0.05, 5.0),
+        ),
+        offset=TiledCameraCfg.OffsetCfg(pos=CAMERA_POS, 
+                                        rot=CAMERA_ROT,  ## may need to be arranged
+                                        convention="ros"),
+    )
+
+
 ##
 # MDP settings
 ##
@@ -93,7 +158,7 @@ class CommandsCfg:
         asset_name="robot",
         body_name=MISSING,  # will be set by agent env cfg
         resampling_time_range=(10.0, 10.0),
-        debug_vis=True,
+        debug_vis=False,
         ranges=mdp.UniformPoseCommandCfg.Ranges(
             pos_x=(-0.1, 0.1),
             pos_y=(-0.3, -0.1),
@@ -127,6 +192,15 @@ class ObservationsCfg:
         object_position = ObsTerm(func=mdp.object_position_in_robot_root_frame)
         target_object_position = ObsTerm(func=mdp.generated_commands, params={"command_name": "object_pose"})
         actions = ObsTerm(func=mdp.last_action)
+
+        image_features = ObsTerm(
+            func=mdp.image_features,
+            params={
+                "sensor_cfg": SceneEntityCfg("wrist_camera"),
+                "data_type": "rgb",
+                "model_name": "resnet18",
+            },
+        )   
 
         def __post_init__(self):
             self.enable_corruption = True
@@ -217,7 +291,7 @@ class PickPlaceEnvCfg(ManagerBasedRLEnvCfg):
     """Configuration for the pick and place environment."""
 
     # Scene settings
-    scene: ObjectTableSceneCfg = ObjectTableSceneCfg(num_envs=4096, env_spacing=2.5)
+    scene: ObjectTableSceneCfg = ObjectTableSceneCfg(num_envs=1024, env_spacing=2.5)
     # Basic settings
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
