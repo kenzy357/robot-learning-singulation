@@ -3,24 +3,20 @@ source /home/kenzy/isaac_so_arm101/.venv/bin/activate
 
 
 # position 0 agents just to see if everything spawns
-uv run zero_agent --task Isaac-SO-ARM100-PickPlace-Play-v0
+uv run zero_agent --task Isaac-SO-ARM101-PickPlace-Play-v0 --enable_cameras
 
 # random agents
-uv run random_agent --task Isaac-SO-ARM100-PickPlace-Play-v0
+uv run random_agent --task Isaac-SO-ARM101-PickPlace-Play-v0 --enable_cameras
 
 # train 
-uv run train --task Isaac-SO-ARM100-PickPlace-v0 --headless
+uv run train --task Isaac-SO-ARM101-PickPlace-v0 --headless --enable_cameras
+uv run train --task Isaac-SO-ARM101-PickPlace-v0 --headless --enable_cameras --num_envs 16 --max_iterations 100
 
-# test the trained policy (oads the latest checkpoint from logs/rsl_rl/<experiment_name>/<latest_run>/)
-uv run play --task Isaac-SO-ARM100-PickPlace-Play-v0
-    # play specific checckpoint 
-        uv run play --task Isaac-SO-ARM100-PickPlace-Play-v0 \ --checkpoint logs/rsl_rl/pick_place/<run>/model_500.pt
+# test the trained policy (loads the latest checkpoint from logs/rsl_rl/<experiment_name>/<latest_run>/)
+uv run play --task Isaac-SO-ARM101-PickPlace-Play-v0 --enable_cameras
+    # play specific checkpoint 
+        uv run play --task Isaac-SO-ARM101-PickPlace-Play-v0 --enable_cameras \ --checkpoint logs/rsl_rl/pick_place/<run>/model_500.pt
 
-
-##### run with camera 
-uv run train --task Isaac-SO-ARM100-PickPlace-v0 --headless --enable_cameras
-uv run play  --task Isaac-SO-ARM100-PickPlace-Play-v0 --enable_cameras
-uv run zero_agent --task Isaac-SO-ARM100-PickPlace-Play-v0 --enable_cameras
 
 # Viewing the camera feed
                          
@@ -28,7 +24,7 @@ uv run zero_agent --task Isaac-SO-ARM100-PickPlace-Play-v0 --enable_cameras
                                                                                                                                                      
   1. Window → Viewport → Viewport 2 — opens a second viewport panel                                                                                  
   2. In that viewport, click the camera icon (top-left of the viewport)                                                                              
-  3. Select /World/envs/env_0/Robot/wrist/wrist_cam from the dropdown                                                                                
+  3. Select /World/envs/env_0/Robot/wrist_link/wrist_cam from the dropdown                                                                                
                                                                                                                                                      
   You'll see env_0's wrist camera live.                                                                                                              
                                                                                                                                                      

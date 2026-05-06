@@ -13,7 +13,7 @@ from dataclasses import MISSING
 import isaaclab.sim as sim_utils
 
 # from . import mdp
-import isaac_so_arm101.tasks.lift.mdp as mdp
+import isaac_so_arm101.tasks.pick_place.mdp as mdp
 from isaaclab.assets import (
     ArticulationCfg,
     AssetBaseCfg,
@@ -36,8 +36,7 @@ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
 ## added for pick and place
 from isaaclab.sensors import TiledCameraCfg
-from isaaclab.utils.math import quat_from_euler_xyz                                                                                                
-import torch  
+import torch
 
 
 # from isaaclab.utils.offset import OffsetCfg
@@ -49,23 +48,28 @@ import torch
 ##
 # Scene definition
 ##
-def euler_to_quat(x, y, z, device="cpu"):
-    z-=90
-    r = torch.deg2rad(torch.tensor([[x, y, z]], dtype=torch.float32, device=device))
-    q = quat_from_euler_xyz(r[:, 0], r[:, 1], r[:, 2])
-    return tuple(q.squeeze().tolist())
-CAMERA_ROT = euler_to_quat(0.0, 111.0, 0.0)
-CAMERA_POS = (0.0, 0.035, 0.082)
 
-_MARKER_HEIGHT = 0.025                                                                                                                             
-_TIP_HEIGHT = 0.010
-                                                                                                                                                     
-TIP_POS = (     
-    CAMERA_POS[0],
-    CAMERA_POS[1],                                                                                                                                 
-    CAMERA_POS[2] + _MARKER_HEIGHT / 2 + _TIP_HEIGHT / 2
-)   
+'''Camera postion'''
+def euler_to_quat(roll_deg, pitch_deg, yaw_deg, device="cpu"):
+    """Intrinsic XYZ convention (R = Rx·Ry·Rz) — matches Isaac Sim Properties panel directly."""
+    to_rad = lambda v: torch.tensor(v, dtype=torch.float32, device=device) * (torch.pi / 180)
+    r, p, y = to_rad(roll_deg), to_rad(pitch_deg), to_rad(yaw_deg)
+    cr, sr = torch.cos(r / 2), torch.sin(r / 2)
+    cp, sp = torch.cos(p / 2), torch.sin(p / 2)
+    cy, sy = torch.cos(y / 2), torch.sin(y / 2)
+    return (
+        (cr * cp * cy - sr * sp * sy).item(),
+        (sr * cp * cy + cr * sp * sy).item(),
+        (cr * sp * cy - sr * cp * sy).item(),
+        (cr * cp * sy + sr * sp * cy).item(),
+    )
+# CAMERA_ROT = euler_to_quat(110.0, 0.0, 180.0)
+# CAMERA_POS = (0.0, 0.035, 0.082)
 
+CAMERA_ROT = euler_to_quat(90.0, 14.0, 90.0)
+# CAMERA_POS = (-0.04, -0.02, 0.003)
+# CAMERA_POS = (-0.057, -0.006, 0.012)
+CAMERA_POS = (-0.066, 0.021, 0.012)
 
 @configclass
 class ObjectTableSceneCfg(InteractiveSceneCfg):
@@ -105,7 +109,7 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
 
     # thin red cylinder so the camera location is visible in the Isaac Sim viewport
     cam_marker: AssetBaseCfg = AssetBaseCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/wrist/cam_marker",
+        prim_path="{ENV_REGEX_NS}/Robot/wrist_link/cam_marker",
         init_state=AssetBaseCfg.InitialStateCfg(pos=CAMERA_POS,
                                                 rot=CAMERA_ROT),
         spawn=sim_utils.CylinderCfg(
@@ -114,21 +118,21 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0)),
         ),
     )
-    # black tip — 1 cm cap at the front (+Z of the body = optical axis direction)                                                                      
-    # child of cam_marker so it inherits rotation automatically; pos is in body-local frame                                                            
+    # black tip — 1 cm cap at the front (+Z of the body = optical axis direction)
+    # child of cam_marker so it inherits rotation automatically; pos is in body-local frame
     cam_marker_tip: AssetBaseCfg = AssetBaseCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/wrist/cam_marker/tip",                                                                                         
-        init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, 0.0175)),                                                                                
+        prim_path="{ENV_REGEX_NS}/Robot/wrist_link/cam_marker/tip",
+        init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, 0.0175)),
         spawn=sim_utils.CylinderCfg(
-            radius=0.008,                                                                                                                              
-            height=0.010,                                                                                                                            
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.0, 0.0)),                                                                
-        ),                                                                                                                                             
+            radius=0.008,
+            height=0.010,
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.0, 0.0)),
+        ),
     )
-    
+
     # wrist-mounted camera → feeds frozen ResNet18 encoder
     wrist_camera: TiledCameraCfg = TiledCameraCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/wrist/wrist_cam",
+        prim_path="{ENV_REGEX_NS}/Robot/wrist_link/wrist_cam",
         update_period=0.0,
         height=224, 
         width=224,
@@ -189,7 +193,7 @@ class ObservationsCfg:
 
         joint_pos = ObsTerm(func=mdp.joint_pos_rel)
         joint_vel = ObsTerm(func=mdp.joint_vel_rel)
-        object_position = ObsTerm(func=mdp.object_position_in_robot_root_frame)
+        #object_position = ObsTerm(func=mdp.object_position_in_robot_root_frame)
         target_object_position = ObsTerm(func=mdp.generated_commands, params={"command_name": "object_pose"})
         actions = ObsTerm(func=mdp.last_action)
 

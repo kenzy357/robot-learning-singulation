@@ -36,5 +36,5 @@ def object_position_in_robot_root_frame(
     return object_pos_b
 
 def goal_position_in_robot_root_frame():
-    TODO
+    # TODO
     return None

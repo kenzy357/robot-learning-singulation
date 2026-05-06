@@ -1,4 +1,3 @@
-# rotate by 90 in z, the quaternion is not very good
 # train with this already 
 # change the reward
 # change the table so it's more simple, put the right color
