@@ -14,6 +14,7 @@ import isaaclab.sim as sim_utils
 
 # from . import mdp
 import isaac_so_arm101.tasks.pick_place.mdp as mdp
+from isaac_so_arm101.tasks.pick_place.mdp.feature_extractors import DINOV2_MODEL_ZOO
 from isaaclab.assets import (
     ArticulationCfg,
     AssetBaseCfg,
@@ -279,17 +280,19 @@ class ObservationsCfg:
 
         joint_pos = ObsTerm(func=mdp.joint_pos_rel)
         joint_vel = ObsTerm(func=mdp.joint_vel_rel)
+        ee_position = ObsTerm(func=mdp.ee_position_in_robot_root_frame)
         goal_position = ObsTerm(func=mdp.goal_position_in_robot_root_frame)
-        actions = ObsTerm(func=mdp.last_action)
+        actions = ObsTerm(func=mdp.last_action, history_length=4)
 
         image_features = ObsTerm(
             func=mdp.image_features,
             params={
                 "sensor_cfg": SceneEntityCfg("wrist_camera"),
                 "data_type": "rgb",
-                "model_name": "resnet18",
+                "model_zoo_cfg": DINOV2_MODEL_ZOO,
+                "model_name": "dinov2_vits14",
             },
-        )   
+        )
 
         def __post_init__(self):
             self.enable_corruption = True
@@ -372,7 +375,7 @@ class TerminationsCfg:
 
     block_dropped = DoneTerm(
         func=mdp.root_height_below_minimum,
-        params={"minimum_height": -0.05, "asset_cfg": SceneEntityCfg("block")},
+        params={"minimum_height": -0.01, "asset_cfg": SceneEntityCfg("block")},
     )
 
     success = DoneTerm(
@@ -410,7 +413,7 @@ class PickPlaceEnvCfg(ManagerBasedRLEnvCfg):
         """Post initialization."""
         # general settings
         self.decimation = 2
-        self.episode_length_s = 15.0
+        self.episode_length_s = 10.0
         self.viewer.eye = (2.5, 2.5, 1.5)
         # simulation settings
         self.sim.dt = 0.01  # 100Hz

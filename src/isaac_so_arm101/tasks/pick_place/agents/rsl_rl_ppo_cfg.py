@@ -18,7 +18,7 @@ from isaaclab_rl.rsl_rl import (
 
 @configclass
 class PickPlacePPORunnerCfg(RslRlOnPolicyRunnerCfg):
-    num_steps_per_env = 24
+    num_steps_per_env = 64
     max_iterations = 3000
     save_interval = 50
     experiment_name = "pick_place_frozen_net"
