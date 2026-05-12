@@ -20,9 +20,11 @@ from isaaclab_rl.rsl_rl import (
 class PickPlacePPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 24
     max_iterations = 3000
-    save_interval = 50
+    save_interval = 250
     experiment_name = "pick_place_frozen_net"
     empirical_normalization = False
+    logger = "wandb"
+    wandb_project = "isaac_so_arm101_pick_place"
     policy = RslRlPpoActorCriticCfg(
         init_noise_std=1.0,
         actor_hidden_dims=[256, 128, 64],

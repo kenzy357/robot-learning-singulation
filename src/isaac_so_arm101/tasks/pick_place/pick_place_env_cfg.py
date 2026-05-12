@@ -37,6 +37,7 @@ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 ## added for pick and place
 from isaaclab.sensors import TiledCameraCfg
 import torch
+import math
 
 
 # from isaaclab.utils.offset import OffsetCfg
@@ -71,6 +72,44 @@ CAMERA_ROT = euler_to_quat(90.0, 14.0, 90.0)
 # CAMERA_POS = (-0.057, -0.006, 0.012)
 CAMERA_POS = (-0.066, 0.021, 0.012)
 
+
+'''Bowl geometry — octagonal rim approximating a circle of radius BOWL_RADIUS.
+   Radius matches the ``block_in_target_radius`` termination so the visual
+   matches the success criterion.'''
+BOWL_POS = (0.20, -0.15, 0.0)
+BOWL_RADIUS = 0.05
+BOWL_WALL_HEIGHT = 0.025
+BOWL_WALL_THICK = 0.003
+BOWL_FLOOR_THICK = 0.003
+BOWL_N_WALLS = 8
+BOWL_COLOR = (0.732, 0.482, 0.243)  # linear RGB for sRGB #DEB887 (burlywood)
+
+
+def _bowl_wall_cfg(idx: int, n: int = BOWL_N_WALLS) -> RigidObjectCfg:
+    """One wall segment of the octagonal bowl rim, kinematic + collidable."""
+    theta = 2.0 * math.pi * idx / n
+    width = 2.0 * BOWL_RADIUS * math.sin(math.pi / n) + BOWL_WALL_THICK
+    cx = BOWL_POS[0] + (BOWL_RADIUS + BOWL_WALL_THICK / 2.0) * math.cos(theta)
+    cy = BOWL_POS[1] + (BOWL_RADIUS + BOWL_WALL_THICK / 2.0) * math.sin(theta)
+    cz = BOWL_POS[2] + BOWL_FLOOR_THICK + BOWL_WALL_HEIGHT / 2.0
+    rot = (math.cos(theta / 2.0), 0.0, 0.0, math.sin(theta / 2.0))
+    return RigidObjectCfg(
+        prim_path=f"{{ENV_REGEX_NS}}/BowlWall{idx}",
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[cx, cy, cz], rot=list(rot)),
+        spawn=sim_utils.CuboidCfg(
+            size=(BOWL_WALL_THICK, width, BOWL_WALL_HEIGHT),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                kinematic_enabled=True, disable_gravity=True
+            ),
+            mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+            visual_material=sim_utils.PreviewSurfaceCfg(
+                diffuse_color=BOWL_COLOR, roughness=1.0, metallic=0.0
+            ),
+        ),
+    )
+
+
 @configclass
 class ObjectTableSceneCfg(InteractiveSceneCfg):
     """Configuration for the lift scene with a robot and a object.
@@ -85,29 +124,40 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
     # target object: will be populated by agent env cfg
     block: RigidObjectCfg | DeformableObjectCfg = MISSING
 
-    # Bowl approximated as a flat kinematic cylinder. We use a primitive
-    # (vs. an external USD) so the prim has built-in RigidBodyAPI — Isaac Lab
-    # requires it for any RigidObjectCfg, and YCB meshes don't ship with it.
-    # Asset name is ``bowl_floor`` for symmetry with v1 (which uses 5 prims).
+    # Bowl floor: circular cylinder sized to match the reward radius. Collision
+    # is enabled so the cube physically rests inside; the 8 wall segments below
+    # form an octagonal rim that keeps the cube from sliding out.
     bowl_floor = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/BowlFloor",
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.20, -0.15, 0], rot=[1, 0, 0, 0]),
+        init_state=RigidObjectCfg.InitialStateCfg(
+            pos=[BOWL_POS[0], BOWL_POS[1], BOWL_POS[2] + BOWL_FLOOR_THICK / 2.0],
+            rot=[1, 0, 0, 0],
+        ),
         spawn=sim_utils.CylinderCfg(
-            radius=0.01,
-            height=0.007,
+            radius=BOWL_RADIUS,
+            height=BOWL_FLOOR_THICK,
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                kinematic_enabled=True,  # bowl stays put even if hit
+                kinematic_enabled=True,
                 disable_gravity=True,
             ),
             mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
-            collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=False),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
             visual_material=sim_utils.PreviewSurfaceCfg(
-                diffuse_color=(0.732, 0.482, 0.243),  # linear RGB for sRGB #DEB887 (burlywood)
+                diffuse_color=BOWL_COLOR,
                 roughness=1.0,
                 metallic=0.0,
             ),
         ),
     )
+
+    bowl_wall_0 = _bowl_wall_cfg(0)
+    bowl_wall_1 = _bowl_wall_cfg(1)
+    bowl_wall_2 = _bowl_wall_cfg(2)
+    bowl_wall_3 = _bowl_wall_cfg(3)
+    bowl_wall_4 = _bowl_wall_cfg(4)
+    bowl_wall_5 = _bowl_wall_cfg(5)
+    bowl_wall_6 = _bowl_wall_cfg(6)
+    bowl_wall_7 = _bowl_wall_cfg(7)
 
     # Table — primitive cuboid with the exact spec color #B8ADA9.
     # See pick_in_clutter_env_cfg.py for the rationale (sized + positioned so
@@ -250,7 +300,7 @@ class ObservationsCfg:
 
 @configclass
 class EventCfg:
-    """Reset behavior: scene to default + randomize block position on the table."""
+    """Reset behavior: scene defaults, randomize block, zero the stage buffer."""
 
     reset_all = EventTerm(func=mdp.reset_scene_to_default, mode="reset")
 
@@ -264,46 +314,43 @@ class EventCfg:
         },
     )
 
+    # Per-episode stage tracker must zero out at reset (see mdp/rewards.py).
+    reset_stage = EventTerm(func=mdp.reset_episode_stage, mode="reset")
+
+
 @configclass
 class RewardsCfg:
-    """Dense reward shaping. Weights tuned to match upstream Lift task."""
+    """Phase-conditional dense rewards. Each term is active only in its
+    own stage and zero elsewhere — see mdp/rewards.py for the gating logic.
 
-    # Approach the block (~1 when on it).
-    reaching_block = RewTerm(
-        func=mdp.block_ee_distance_tanh,
-        params={"std": 0.05},
-        weight=1.0,
+    Weights climb with each stage so moving up is always strictly better:
+        reach:     ~1   per step  (stage 0)
+        grasp:     ~2   per step  (stage 1)
+        lift:      ~5   per step  (stage 2)
+        transport: ~10  per step  (stage 3)
+        place:     ~20  per step  (stage 4)
+        success:   200  per step  (stage 5, fires for the terminal frame)
+    """
+
+    reach = RewTerm(func=mdp.reach_phase_reward, params={"std": 0.05}, weight=1.0)
+
+    grasp = RewTerm(func=mdp.grasp_phase_reward, weight=2.0)
+
+    lift = RewTerm(func=mdp.lift_phase_reward, params={"max_height": 0.15}, weight=5.0)
+
+    transport = RewTerm(
+        func=mdp.transport_phase_reward, params={"std": 0.1}, weight=10.0
     )
 
-    # Big bonus for getting the block off the table.
-    lifting_block = RewTerm(
-        func=mdp.block_is_lifted,
-        params={"minimal_height": 0.025},
-        weight=15.0,
-    )
+    place = RewTerm(func=mdp.place_phase_reward, params={"std": 0.05}, weight=20.0)
 
-    # Bring the lifted block close to the bowl (multiplied by lifted-condition).
-    block_to_bowl_coarse = RewTerm(
-        func=mdp.block_to_bowl_distance_tanh,
-        params={"std": 0.30, "minimal_height": 0.025},
-        weight=16.0,
-    )
+    success = RewTerm(func=mdp.success_phase_reward, weight=200.0)
 
-    # Same but with a much tighter kernel — bonus only when very close.
-    block_to_bowl_fine = RewTerm(
-        func=mdp.block_to_bowl_distance_tanh,
-        params={"std": 0.05, "minimal_height": 0.025},
-        weight=5.0,
-    )
+    # Sparse transition signals: explicit reward for moving to a higher stage,
+    # explicit penalty for slipping below the episode's max. Symmetric pair.
+    stage_progress = RewTerm(func=mdp.stage_progress_reward, weight=1.0)
+    stage_regression = RewTerm(func=mdp.stage_regression_penalty, weight=-10.0)
 
-    # Sparse success bonus: block actually inside the bowl.
-    success_bonus = RewTerm(
-        func=mdp.block_in_bowl,
-        params={"xy_threshold": 0.04, "z_max_above_bowl": 0.05},
-        weight=50.0,
-    )
-
-    # Smooth-action penalties.
     action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1e-4)
     joint_vel = RewTerm(
         func=mdp.joint_vel_l2,
