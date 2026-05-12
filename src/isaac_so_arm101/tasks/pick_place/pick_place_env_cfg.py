@@ -301,7 +301,7 @@ class ObservationsCfg:
 
 @configclass
 class EventCfg:
-    """Reset behavior: scene defaults, randomize block, zero the stage buffer."""
+    """Reset behavior: scene defaults + (optionally) randomize block."""
 
     reset_all = EventTerm(func=mdp.reset_scene_to_default, mode="reset")
 
@@ -316,49 +316,50 @@ class EventCfg:
         },
     )
 
-    # Per-episode stage tracker must zero out at reset (see mdp/rewards.py).
-    reset_stage = EventTerm(func=mdp.reset_episode_stage, mode="reset")
-
 
 @configclass
 class RewardsCfg:
-    """Phase-conditional dense rewards. Each term is active only in its
-    own stage and zero elsewhere — see mdp/rewards.py for the gating logic.
+    """Additive rewards — mirror of the upstream Isaac Lab Lift task pattern.
 
-    Weights climb with each stage so moving up is always strictly better:
-        reach:     ~1   per step  (stage 0)
-        grasp:     ~2   per step  (stage 1)
-        lift:      ~5   per step  (stage 2)
-        transport: ~10  per step  (stage 3)
-        place:     ~20  per step  (stage 4)
-        success:   200  per step  (stage 5, fires for the terminal frame)
+    All terms are always-on; ``goal_xy_*`` is multiplied by a lifted flag so it
+    only contributes once the block is off the table. ``success`` is the sparse
+    high-weight term that dominates once the block sits in the bowl.
     """
 
-    reach = RewTerm(func=mdp.reach_phase_reward, params={"std": 0.05}, weight=1.0)
-
-    grasp = RewTerm(func=mdp.grasp_phase_reward, weight=2.0)
-
-    lift = RewTerm(func=mdp.lift_phase_reward, params={"max_height": 0.15}, weight=5.0)
-
-    transport = RewTerm(
-        func=mdp.transport_phase_reward, params={"std": 0.1}, weight=10.0
+    reach = RewTerm(
+        func=mdp.block_ee_distance_tanh,
+        params={"std": 0.05},
+        weight=1.0,
     )
 
-    place = RewTerm(func=mdp.place_phase_reward, params={"std": 0.05}, weight=20.0)
+    lift = RewTerm(
+        func=mdp.block_is_lifted,
+        params={"minimal_height": 0.04},
+        weight=15.0,
+    )
 
-    success = RewTerm(func=mdp.success_phase_reward, weight=200.0)
+    goal_xy_coarse = RewTerm(
+        func=mdp.block_to_goal_xy_distance_tanh,
+        params={"std": 0.30, "minimal_height": 0.04},
+        weight=10.0,
+    )
 
-    # Sparse transition signals: explicit reward for moving to a higher stage,
-    # explicit penalty for slipping below the episode's max.
-    stage_progress = RewTerm(func=mdp.stage_progress_reward, weight=1.0)
-    stage_regression = RewTerm(func=mdp.stage_regression_penalty, weight=-10.0)
-    # One-shot big penalty on the moment of stage drop (symmetric to stage_progress).
-    stage_regression_event = RewTerm(func=mdp.stage_regression_event_penalty, weight=-1.0)
+    goal_xy_fine = RewTerm(
+        func=mdp.block_to_goal_xy_distance_tanh,
+        params={"std": 0.05, "minimal_height": 0.04},
+        weight=5.0,
+    )
 
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1e-3)
+    success = RewTerm(
+        func=mdp.block_in_bowl,
+        params={"xy_threshold": 0.04, "z_max_above_bowl": 0.05},
+        weight=100.0,
+    )
+
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1e-4)
     joint_vel = RewTerm(
         func=mdp.joint_vel_l2,
-        weight=-1e-3,
+        weight=-1e-4,
         params={"asset_cfg": SceneEntityCfg("robot")},
     )
 
