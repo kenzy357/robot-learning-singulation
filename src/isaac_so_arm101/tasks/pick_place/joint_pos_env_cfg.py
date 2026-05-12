@@ -15,6 +15,9 @@ from isaac_so_arm101.tasks.pick_place.pick_place_env_cfg import PickPlaceEnvCfg
 
 from isaaclab.markers.config import FRAME_MARKER_CFG  # isort: skip
 
+#
+import isaaclab.sim as sim_utils
+
 
 @configclass
 class SoArm101PickPlaceEnvCfg(PickPlaceEnvCfg):
@@ -38,17 +41,14 @@ class SoArm101PickPlaceEnvCfg(PickPlaceEnvCfg):
             open_command_expr={"gripper": 0.5},
             close_command_expr={"gripper": 0.0},
         )
-        # Set the body name for the end effector
-        self.commands.object_pose.body_name = ["gripper_link"]
 
         # Set Cube as object
-        self.scene.object = RigidObjectCfg(
-            prim_path="{ENV_REGEX_NS}/Object",
-            init_state=RigidObjectCfg.InitialStateCfg(pos=[0.2, 0.0, 0.01], rot=[1, 0, 0, 0]),
-            spawn=UsdFileCfg(
-                usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Blocks/DexCube/dex_cube_instanceable.usd",
-                scale=(0.25, 0.25, 0.25),
-                rigid_props=RigidBodyPropertiesCfg(
+        self.scene.block = RigidObjectCfg(
+            prim_path="{ENV_REGEX_NS}/Block",
+            init_state=RigidObjectCfg.InitialStateCfg(pos=[0.20, 0.0, 0.01], rot=[1, 0, 0, 0]),
+            spawn=sim_utils.CuboidCfg(
+                size=(0.02, 0.02, 0.02),
+                rigid_props=sim_utils.RigidBodyPropertiesCfg(
                     solver_position_iteration_count=16,
                     solver_velocity_iteration_count=1,
                     max_angular_velocity=1000.0,
@@ -56,8 +56,31 @@ class SoArm101PickPlaceEnvCfg(PickPlaceEnvCfg):
                     max_depenetration_velocity=5.0,
                     disable_gravity=False,
                 ),
+                mass_props=sim_utils.MassPropertiesCfg(mass=0.05),
+                collision_props=sim_utils.CollisionPropertiesCfg(),
+                visual_material=sim_utils.PreviewSurfaceCfg(
+                    diffuse_color=(1.0, 0.0, 0.0), metallic=0.0
+                ),
             ),
         )
+        
+        # old cube 
+        # RigidObjectCfg(
+        #     prim_path="{ENV_REGEX_NS}/Object",
+        #     init_state=RigidObjectCfg.InitialStateCfg(pos=[0.2, 0.0, 0.01], rot=[1, 0, 0, 0]),
+        #     spawn=UsdFileCfg(
+        #         usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Blocks/DexCube/dex_cube_instanceable.usd",
+        #         scale=(0.25, 0.25, 0.25),
+        #         rigid_props=RigidBodyPropertiesCfg(
+        #             solver_position_iteration_count=16,
+        #             solver_velocity_iteration_count=1,
+        #             max_angular_velocity=1000.0,
+        #             max_linear_velocity=1000.0,
+        #             max_depenetration_velocity=5.0,
+        #             disable_gravity=False,
+        #         ),
+        #     ),
+        # )
 
         # Listens to the required transforms
         marker_cfg = FRAME_MARKER_CFG.copy()
@@ -114,8 +137,6 @@ class SoArm100PickPlaceEnvCfg(PickPlaceEnvCfg):
             open_command_expr={"gripper": 0.5},
             close_command_expr={"gripper": 0.0},
         )
-        # Set the body name for the end effector
-        self.commands.object_pose.body_name = ["gripper"]
 
         # Set Cube as object
         self.scene.object = RigidObjectCfg(

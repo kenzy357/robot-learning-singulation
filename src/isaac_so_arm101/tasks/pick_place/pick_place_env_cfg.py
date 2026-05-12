@@ -83,23 +83,55 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
     # end-effector sensor: will be populated by agent env cfg
     ee_frame: FrameTransformerCfg = MISSING
     # target object: will be populated by agent env cfg
-    object: RigidObjectCfg | DeformableObjectCfg = MISSING
+    block: RigidObjectCfg | DeformableObjectCfg = MISSING
 
-    # Table
-    table = AssetBaseCfg(
-        prim_path="{ENV_REGEX_NS}/Table",
-        init_state=AssetBaseCfg.InitialStateCfg(pos=[0.5, 0, 0], rot=[0.707, 0, 0, 0.707]),
-        spawn=UsdFileCfg(usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Mounts/SeattleLabTable/table_instanceable.usd"),
+    # Bowl approximated as a flat kinematic cylinder. We use a primitive
+    # (vs. an external USD) so the prim has built-in RigidBodyAPI — Isaac Lab
+    # requires it for any RigidObjectCfg, and YCB meshes don't ship with it.
+    # Asset name is ``bowl_floor`` for symmetry with v1 (which uses 5 prims).
+    bowl_floor = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/BowlFloor",
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.20, -0.15, 0], rot=[1, 0, 0, 0]),
+        spawn=sim_utils.CylinderCfg(
+            radius=0.01,
+            height=0.007,
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                kinematic_enabled=True,  # bowl stays put even if hit
+                disable_gravity=True,
+            ),
+            mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
+            collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=False),
+            visual_material=sim_utils.PreviewSurfaceCfg(
+                diffuse_color=(0.732, 0.482, 0.243),  # linear RGB for sRGB #DEB887 (burlywood)
+                roughness=1.0,
+                metallic=0.0,
+            ),
+        ),
     )
 
-    # plane
+    # Table — primitive cuboid with the exact spec color #B8ADA9.
+    # See pick_in_clutter_env_cfg.py for the rationale (sized + positioned so
+    # the cluster + cluster-randomization stays on the table).
+    table = AssetBaseCfg(
+        prim_path="{ENV_REGEX_NS}/Table",
+        init_state=AssetBaseCfg.InitialStateCfg(pos=[0.40, 0, -0.02]),
+        spawn=sim_utils.CuboidCfg(
+            size=(0.80, 1.00, 0.04),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+            visual_material=sim_utils.PreviewSurfaceCfg(
+                diffuse_color=(0.485, 0.426, 0.408),  # #B8ADA9
+                roughness=1.0,
+                metallic=0.0,
+            ),
+        ),
+    )
+
     plane = AssetBaseCfg(
         prim_path="/World/GroundPlane",
         init_state=AssetBaseCfg.InitialStateCfg(pos=[0, 0, -1.05]),
         spawn=GroundPlaneCfg(),
     )
 
-    # lights
     light = AssetBaseCfg(
         prim_path="/World/light",
         spawn=sim_utils.DomeLightCfg(color=(0.75, 0.75, 0.75), intensity=3000.0),
@@ -132,7 +164,7 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
 
     # wrist-mounted camera → feeds frozen ResNet18 encoder
     wrist_camera: TiledCameraCfg = TiledCameraCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/wrist_link/wrist_cam",
+        prim_path="{ENV_REGEX_NS}/Robot/wrist_link/cam_marker/tip/wrist_cam",
         update_period=0.0,
         height=224, 
         width=224,
@@ -143,9 +175,12 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
             horizontal_aperture=20.955,
             clipping_range=(0.05, 5.0),
         ),
-        offset=TiledCameraCfg.OffsetCfg(pos=CAMERA_POS, 
-                                        rot=CAMERA_ROT,  ## may need to be arranged
+        offset=TiledCameraCfg.OffsetCfg(
+                                        rot=(0.0, 0.0, 0.0, 1.0),  ## may need to be arranged
                                         convention="ros"),
+        # offset=TiledCameraCfg.OffsetCfg(pos=CAMERA_POS, 
+        #                                 rot=CAMERA_ROT,  ## may need to be arranged
+        #                                 convention="ros"),
     )
 
 
@@ -154,24 +189,24 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
 ##
 
 
-@configclass
-class CommandsCfg:
-    """Command terms for the MDP."""
-## that's the goal 
-    object_pose = mdp.UniformPoseCommandCfg(
-        asset_name="robot",
-        body_name=MISSING,  # will be set by agent env cfg
-        resampling_time_range=(10.0, 10.0),
-        debug_vis=False,
-        ranges=mdp.UniformPoseCommandCfg.Ranges(
-            pos_x=(-0.1, 0.1),
-            pos_y=(-0.3, -0.1),
-            pos_z=(0.1, 0.1),
-            roll=(0.0, 0.0),
-            pitch=(0.0, 0.0),
-            yaw=(0.0, 0.0),
-        ),
-    )
+# @configclass
+# class CommandsCfg:
+#     """Command terms for the MDP."""
+# ## that's the goal 
+#     object_pose = mdp.UniformPoseCommandCfg(
+#         asset_name="robot",
+#         body_name=MISSING,  # will be set by agent env cfg
+#         resampling_time_range=(10.0, 10.0),
+#         debug_vis=False,
+#         ranges=mdp.UniformPoseCommandCfg.Ranges(
+#             pos_x=(-0.1, 0.1),
+#             pos_y=(-0.3, -0.1),
+#             pos_z=(0.1, 0.1),
+#             roll=(0.0, 0.0),
+#             pitch=(0.0, 0.0),
+#             yaw=(0.0, 0.0),
+#         ),
+#     )
 
 
 @configclass
@@ -193,8 +228,7 @@ class ObservationsCfg:
 
         joint_pos = ObsTerm(func=mdp.joint_pos_rel)
         joint_vel = ObsTerm(func=mdp.joint_vel_rel)
-        #object_position = ObsTerm(func=mdp.object_position_in_robot_root_frame)
-        target_object_position = ObsTerm(func=mdp.generated_commands, params={"command_name": "object_pose"})
+        goal_position = ObsTerm(func=mdp.goal_position_in_robot_root_frame)
         actions = ObsTerm(func=mdp.last_action)
 
         image_features = ObsTerm(
@@ -216,44 +250,61 @@ class ObservationsCfg:
 
 @configclass
 class EventCfg:
-    """Configuration for events."""
+    """Reset behavior: scene to default + randomize block position on the table."""
 
     reset_all = EventTerm(func=mdp.reset_scene_to_default, mode="reset")
 
-    reset_object_position = EventTerm(
+    reset_block_position = EventTerm(
         func=mdp.reset_root_state_uniform,
         mode="reset",
         params={
-            "pose_range": {"x": (-0.1, 0.1), "y": (-0.2, 0.2), "z": (0.0, 0.0)},
+            "pose_range": {"x": (-0.05, 0.05), "y": (-0.05, 0.05), "z": (0.0, 0.0)},
             "velocity_range": {},
-            "asset_cfg": SceneEntityCfg("object", body_names="Object"),
+            "asset_cfg": SceneEntityCfg("block"),
         },
     )
 
-
 @configclass
 class RewardsCfg:
-    """Reward terms for the MDP."""
+    """Dense reward shaping. Weights tuned to match upstream Lift task."""
 
-    reaching_object = RewTerm(func=mdp.object_ee_distance, params={"std": 0.05}, weight=1.0)
+    # Approach the block (~1 when on it).
+    reaching_block = RewTerm(
+        func=mdp.block_ee_distance_tanh,
+        params={"std": 0.05},
+        weight=1.0,
+    )
 
-    lifting_object = RewTerm(func=mdp.object_is_lifted, params={"minimal_height": 0.025}, weight=15.0)
+    # Big bonus for getting the block off the table.
+    lifting_block = RewTerm(
+        func=mdp.block_is_lifted,
+        params={"minimal_height": 0.025},
+        weight=15.0,
+    )
 
-    object_goal_tracking = RewTerm(
-        func=mdp.object_goal_distance,
-        params={"std": 0.3, "minimal_height": 0.025, "command_name": "object_pose"},
+    # Bring the lifted block close to the bowl (multiplied by lifted-condition).
+    block_to_bowl_coarse = RewTerm(
+        func=mdp.block_to_bowl_distance_tanh,
+        params={"std": 0.30, "minimal_height": 0.025},
         weight=16.0,
     )
 
-    object_goal_tracking_fine_grained = RewTerm(
-        func=mdp.object_goal_distance,
-        params={"std": 0.05, "minimal_height": 0.025, "command_name": "object_pose"},
+    # Same but with a much tighter kernel — bonus only when very close.
+    block_to_bowl_fine = RewTerm(
+        func=mdp.block_to_bowl_distance_tanh,
+        params={"std": 0.05, "minimal_height": 0.025},
         weight=5.0,
     )
 
-    # action penalty
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1e-4)
+    # Sparse success bonus: block actually inside the bowl.
+    success_bonus = RewTerm(
+        func=mdp.block_in_bowl,
+        params={"xy_threshold": 0.04, "z_max_above_bowl": 0.05},
+        weight=50.0,
+    )
 
+    # Smooth-action penalties.
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1e-4)
     joint_vel = RewTerm(
         func=mdp.joint_vel_l2,
         weight=-1e-4,
@@ -263,13 +314,24 @@ class RewardsCfg:
 
 @configclass
 class TerminationsCfg:
-    """Termination terms for the MDP."""
+    """Episode endings: timeout, block falling off the world, success."""
 
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
 
-    object_dropping = DoneTerm(
-        func=mdp.root_height_below_minimum, params={"minimum_height": -0.05, "asset_cfg": SceneEntityCfg("object")}
+    block_dropped = DoneTerm(
+        func=mdp.root_height_below_minimum,
+        params={"minimum_height": -0.05, "asset_cfg": SceneEntityCfg("block")},
     )
+
+    success = DoneTerm(
+        func=mdp.success_block_in_bowl,
+        params={"xy_threshold": 0.04, "z_max_above_bowl": 0.01},
+    )
+
+    # block_in_target_radius = DoneTerm(
+    #     func=mdp.block_in_target_radius,
+    #     params={"radius": 0.05},
+    # )
 
 
 @configclass
@@ -299,7 +361,7 @@ class PickPlaceEnvCfg(ManagerBasedRLEnvCfg):
     # Basic settings
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
-    commands: CommandsCfg = CommandsCfg()
+    #commands: CommandsCfg = CommandsCfg()
     # MDP settings
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
@@ -310,7 +372,7 @@ class PickPlaceEnvCfg(ManagerBasedRLEnvCfg):
         """Post initialization."""
         # general settings
         self.decimation = 2
-        self.episode_length_s = 10.0
+        self.episode_length_s = 15.0
         self.viewer.eye = (2.5, 2.5, 1.5)
         # simulation settings
         self.sim.dt = 0.01  # 100Hz

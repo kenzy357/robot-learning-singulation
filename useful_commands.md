@@ -14,8 +14,9 @@ uv run train --task Isaac-SO-ARM101-PickPlace-v0 --headless --enable_cameras --n
 
 # test the trained policy (loads the latest checkpoint from logs/rsl_rl/<experiment_name>/<latest_run>/)
 uv run play --task Isaac-SO-ARM101-PickPlace-Play-v0 --enable_cameras
-    # play specific checkpoint 
-        uv run play --task Isaac-SO-ARM101-PickPlace-Play-v0 --enable_cameras \ --checkpoint logs/rsl_rl/pick_place/<run>/model_500.pt
+
+# play specific checkpoint 
+uv run play --task Isaac-SO-ARM101-PickPlace-Play-v0 --enable_cameras \ --checkpoint logs/rsl_rl/pick_place/<run>/model_500.pt
 
 
 # Viewing the camera feed

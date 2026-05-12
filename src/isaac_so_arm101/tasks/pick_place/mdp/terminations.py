@@ -56,3 +56,61 @@ def object_reached_goal(
 
     # rewarded if the object is lifted above the threshold
     return distance < threshold
+
+
+# ---------------------------------------------------------------------------
+# v0 — single block
+# ---------------------------------------------------------------------------
+def success_block_in_bowl(
+    env: ManagerBasedRLEnv,
+    xy_threshold: float = 0.04,
+    z_max_above_bowl: float = 0.05,
+    block_cfg: SceneEntityCfg = SceneEntityCfg("block"),
+    bowl_cfg: SceneEntityCfg = SceneEntityCfg("bowl_floor"),
+) -> torch.Tensor:
+    block: RigidObject = env.scene[block_cfg.name]
+    bowl: RigidObject = env.scene[bowl_cfg.name]
+    block_pos = block.data.root_pos_w
+    bowl_pos = bowl.data.root_pos_w
+    xy_distance = torch.norm(block_pos[:, :2] - bowl_pos[:, :2], dim=1)
+    inside_xy = xy_distance < xy_threshold
+    dz = block_pos[:, 2] - bowl_pos[:, 2]
+    inside_z = (dz > -0.01) & (dz < z_max_above_bowl)
+    return inside_xy & inside_z
+
+
+def block_in_target_radius(
+    env: ManagerBasedRLEnv,
+    radius: float = 0.05,
+    block_cfg: SceneEntityCfg = SceneEntityCfg("block"),
+    bowl_cfg: SceneEntityCfg = SceneEntityCfg("bowl_floor"),
+) -> torch.Tensor:
+    """Terminate when the block enters a 3D sphere of given radius around the bowl center."""
+    block: RigidObject = env.scene[block_cfg.name]
+    bowl: RigidObject = env.scene[bowl_cfg.name]
+    distance = torch.norm(block.data.root_pos_w - bowl.data.root_pos_w, dim=1)
+    return distance < radius
+
+
+# ---------------------------------------------------------------------------
+# v1 — two colored blocks (target-aware)
+# ---------------------------------------------------------------------------
+def success_target_block_in_bowl(
+    env: ManagerBasedRLEnv,
+    xy_threshold: float = 0.04,
+    z_max_above_bowl: float = 0.05,
+    bowl_cfg: SceneEntityCfg = SceneEntityCfg("bowl_floor"),
+) -> torch.Tensor:
+    """Episode succeeds when the *target* (color-matching) block is in the bowl."""
+    bowl: RigidObject = env.scene[bowl_cfg.name]
+    red: RigidObject = env.scene["block_red"]
+    blue: RigidObject = env.scene["block_blue"]
+    target_idx = env.target_color  # (num_envs,)
+    is_red = (target_idx == 0).unsqueeze(-1)
+    target_pos = torch.where(is_red, red.data.root_pos_w, blue.data.root_pos_w)
+    bowl_pos = bowl.data.root_pos_w
+    xy_distance = torch.norm(target_pos[:, :2] - bowl_pos[:, :2], dim=1)
+    inside_xy = xy_distance < xy_threshold
+    dz = target_pos[:, 2] - bowl_pos[:, 2]
+    inside_z = (dz > -0.01) & (dz < z_max_above_bowl)
+    return inside_xy & inside_z

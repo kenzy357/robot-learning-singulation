@@ -8,6 +8,13 @@
 
 # do we also randomize the position of the goal every time during training ?
 # do we need to include the camera for training or can we just process the data and give it to the policy ?
+# whhy no commands in Rayan's code ?
+
+
+
+##   ce qui pourrait ne pas marcher
+- j'ai commands et pas lui
+- initialisation de joint_pos_env pas la meme
 
 
 -pretrained CNN       or    -CNN that we train

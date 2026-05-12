@@ -35,6 +35,16 @@ def object_position_in_robot_root_frame(
     )
     return object_pos_b
 
-def goal_position_in_robot_root_frame():
-    # TODO
-    return None
+def goal_position_in_robot_root_frame(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    goal_cfg: SceneEntityCfg = SceneEntityCfg("bowl_floor"),
+) -> torch.Tensor:
+    """The position of the goal (bowl) in the robot's root frame."""
+    robot: RigidObject = env.scene[robot_cfg.name]
+    goal: RigidObject = env.scene[goal_cfg.name]
+    goal_pos_w = goal.data.root_pos_w[:, :3]
+    goal_pos_b, _ = subtract_frame_transforms(
+        robot.data.root_state_w[:, :3], robot.data.root_state_w[:, 3:7], goal_pos_w
+    )
+    return goal_pos_b
