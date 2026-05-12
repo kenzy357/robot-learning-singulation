@@ -21,7 +21,6 @@ from isaaclab.assets import (
     RigidObjectCfg,
 )
 from isaaclab.envs import ManagerBasedRLEnvCfg
-from isaaclab.managers import CurriculumTermCfg as CurrTerm
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
@@ -189,6 +188,8 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
 
 
 
+    
+
     # thin red cylinder so the camera location is visible in the Isaac Sim viewport
     cam_marker: AssetBaseCfg = AssetBaseCfg(
         prim_path="{ENV_REGEX_NS}/Robot/wrist_link/cam_marker",
@@ -308,7 +309,8 @@ class EventCfg:
         func=mdp.reset_root_state_uniform,
         mode="reset",
         params={
-            "pose_range": {"x": (-0.05, 0.05), "y": (-0.05, 0.05), "z": (0.0, 0.0)},
+            # "pose_range": {"x": (-0.05, 0.05), "y": (-0.05, 0.05), "z": (0.0, 0.0)},
+            "pose_range": {"x": (0.0, 0.0), "y": (0.0, 0.0), "z": (0.0, 0.0)},
             "velocity_range": {},
             "asset_cfg": SceneEntityCfg("block"),
         },
@@ -347,14 +349,16 @@ class RewardsCfg:
     success = RewTerm(func=mdp.success_phase_reward, weight=200.0)
 
     # Sparse transition signals: explicit reward for moving to a higher stage,
-    # explicit penalty for slipping below the episode's max. Symmetric pair.
+    # explicit penalty for slipping below the episode's max.
     stage_progress = RewTerm(func=mdp.stage_progress_reward, weight=1.0)
     stage_regression = RewTerm(func=mdp.stage_regression_penalty, weight=-10.0)
+    # One-shot big penalty on the moment of stage drop (symmetric to stage_progress).
+    stage_regression_event = RewTerm(func=mdp.stage_regression_event_penalty, weight=-1.0)
 
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1e-4)
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1e-3)
     joint_vel = RewTerm(
         func=mdp.joint_vel_l2,
-        weight=-1e-4,
+        weight=-1e-3,
         params={"asset_cfg": SceneEntityCfg("robot")},
     )
 
@@ -381,19 +385,6 @@ class TerminationsCfg:
     # )
 
 
-@configclass
-class CurriculumCfg:
-    """Curriculum terms for the MDP."""
-
-    action_rate = CurrTerm(
-        func=mdp.modify_reward_weight, params={"term_name": "action_rate", "weight": -1e-1, "num_steps": 10000}
-    )
-
-    joint_vel = CurrTerm(
-        func=mdp.modify_reward_weight, params={"term_name": "joint_vel", "weight": -1e-1, "num_steps": 10000}
-    )
-
-
 ##
 # Environment configuration
 ##
@@ -413,7 +404,6 @@ class PickPlaceEnvCfg(ManagerBasedRLEnvCfg):
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
     events: EventCfg = EventCfg()
-    curriculum: CurriculumCfg = CurriculumCfg()
 
     def __post_init__(self):
         """Post initialization."""

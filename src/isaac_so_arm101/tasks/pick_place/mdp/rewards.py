@@ -37,6 +37,7 @@ import torch
 from isaaclab.assets import RigidObject
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.sensors import FrameTransformer
+from isaaclab.utils.math import subtract_frame_transforms
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -59,9 +60,11 @@ def _ensure_stage_buffer(env: "ManagerBasedRLEnv") -> None:
 
 
 def reset_episode_stage(env: "ManagerBasedRLEnv", env_ids: torch.Tensor) -> None:
-    """Zero the per-env max-stage buffer at episode reset."""
+    """Zero the per-env max-stage AND previous-stage buffers at episode reset."""
     _ensure_stage_buffer(env)
     env.episode_max_stage[env_ids] = 0
+    if hasattr(env, "_prev_stage"):
+        env._prev_stage[env_ids] = 0
 
 
 # ---------------------------------------------------------------------------
@@ -70,7 +73,7 @@ def reset_episode_stage(env: "ManagerBasedRLEnv", env_ids: torch.Tensor) -> None
 def _compute_current_stage(
     env: "ManagerBasedRLEnv",
     gripper_closed_threshold: float = 0.15,
-    ee_to_block_threshold: float = 0.04,
+    ee_to_block_threshold: float = 0.01,
     approach_threshold: float = 0.05,
     lift_threshold: float = 0.05,
     above_bowl_xy_threshold: float = 0.06,
@@ -85,18 +88,23 @@ def _compute_current_stage(
     block_pos_w = block.data.root_pos_w
     bowl_pos_w = bowl.data.root_pos_w
     ee_pos_w = ee_frame.data.target_pos_w[..., 0, :]
+    ee_quat_w = ee_frame.data.target_quat_w[..., 0, :]
+    block_pos_ee, _ = subtract_frame_transforms(ee_pos_w, ee_quat_w, block.data.root_pos_w)
 
     gripper_idx = robot.data.joint_names.index("gripper")
     is_closed = robot.data.joint_pos[:, gripper_idx] < gripper_closed_threshold
     ee_dist = torch.norm(ee_pos_w - block_pos_w, dim=1)
-    grasped = is_closed & (ee_dist < ee_to_block_threshold)
+    #take distance in z
+    #ee_z_dist = (ee_pos_w - block_pos_w)[:, 2].abs()
+    ee_z_dist = block_pos_ee[:, 2].abs()
+    grasped = is_closed & (ee_dist < ee_to_block_threshold) & (ee_z_dist < ee_to_block_threshold)
 
     xy_dist_bowl = torch.norm(block_pos_w[:, :2] - bowl_pos_w[:, :2], dim=1)
     dz = block_pos_w[:, 2] - bowl_pos_w[:, 2]
     in_bowl = (xy_dist_bowl < in_bowl_xy_threshold) & (dz > -0.01) & (dz < in_bowl_z_max)
     lifted = block_pos_w[:, 2] > lift_threshold
 
-    s1 = (ee_dist < approach_threshold).long() * 1
+    s1 = ((ee_dist < approach_threshold) & (ee_z_dist < ee_to_block_threshold)).long() * 1
     s2 = grasped.long() * 2
     s3 = (grasped & lifted).long() * 3
     s4 = (grasped & lifted & (xy_dist_bowl < above_bowl_xy_threshold)).long() * 4
@@ -120,7 +128,16 @@ def reach_phase_reward(
     distance = torch.norm(
         block.data.root_pos_w - ee_frame.data.target_pos_w[..., 0, :], dim=1
     )
-    signal = 1.0 - torch.tanh(distance / std)
+
+    # minimize z_distance between cube and end effector
+    ee_pos_w = ee_frame.data.target_pos_w[..., 0, :]
+    ee_quat_w = ee_frame.data.target_quat_w[..., 0, :]
+    block_pos_ee, _ = subtract_frame_transforms(ee_pos_w, ee_quat_w, block.data.root_pos_w)
+    ee_z_dist = block_pos_ee[:, 2].abs()
+    signal_z_dist = 1.0 - torch.tanh(ee_z_dist / std)
+
+    signal_dist = 1.0 - torch.tanh(distance / std)
+    signal = signal_dist*signal_z_dist
     stage = _compute_current_stage(env)
     return signal * (stage == 0).float()
 
@@ -232,3 +249,27 @@ def stage_regression_penalty(env: "ManagerBasedRLEnv") -> torch.Tensor:
     _ensure_stage_buffer(env)
     current = _compute_current_stage(env)
     return (current < env.episode_max_stage).float()
+
+
+def stage_regression_event_penalty(
+    env: "ManagerBasedRLEnv",
+    regression_penalties: tuple[float, ...] = (0.0, 2.0, 5.0, 15.0, 30.0, 100.0),
+) -> torch.Tensor:
+    """One-shot penalty the step the policy drops to a lower stage. Use NEGATIVE weight.
+
+    Symmetric counterpart to ``stage_progress_reward`` — penalty magnitude is
+    indexed by the stage the agent *left* (so dropping from stage 4 costs 30,
+    dropping from stage 1 costs 2). Penalty values are absolute magnitudes;
+    pair with weight=-1.0 (or larger if you want even sharper discouragement).
+
+    The ``_prev_stage`` buffer is reset at episode start by
+    ``reset_episode_stage``.
+    """
+    if not hasattr(env, "_prev_stage"):
+        env._prev_stage = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
+    current = _compute_current_stage(env)
+    dropped = current < env._prev_stage
+    penalties = torch.tensor(regression_penalties, device=env.device, dtype=torch.float32)
+    out = penalties[env._prev_stage] * dropped.float()
+    env._prev_stage = current.clone()
+    return out

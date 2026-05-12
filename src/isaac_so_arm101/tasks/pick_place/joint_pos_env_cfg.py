@@ -1,5 +1,5 @@
 import isaaclab_tasks.manager_based.manipulation.lift.mdp as mdp
-from isaaclab.assets import RigidObjectCfg
+from isaaclab.assets import AssetBaseCfg, RigidObjectCfg
 
 # from isaaclab.managers NotImplementedError
 from isaaclab.sensors.frame_transformer.frame_transformer_cfg import (
@@ -86,7 +86,7 @@ class SoArm101PickPlaceEnvCfg(PickPlaceEnvCfg):
         marker_cfg = FRAME_MARKER_CFG.copy()
         marker_cfg.markers["frame"].scale = (0.05, 0.05, 0.05)
         marker_cfg.prim_path = "/Visuals/FrameTransformer"
-        self.scene.ee_frame = FrameTransformerCfg(
+        self.scene.ee_frame = FrameTransformerCfg( 
             prim_path="{ENV_REGEX_NS}/Robot/base_link",
             debug_vis=True,
             visualizer_cfg=marker_cfg,
@@ -95,11 +95,23 @@ class SoArm101PickPlaceEnvCfg(PickPlaceEnvCfg):
                     prim_path="{ENV_REGEX_NS}/Robot/gripper_link",
                     name="end_effector",
                     offset=OffsetCfg(
-                        pos=[0.01, 0.0, -0.09],
+                        #pos=[0.01, 0.0, -0.09],
+                        pos=[0.01, 0.0, -0.08],
                     ),
                 ),
             ],
         )
+        #################### debug ########################################
+        # Small green sphere at the EE frame for visual debugging — must use
+        # the same offset as the ee_frame target above.
+        # self.scene.ee_marker = AssetBaseCfg(
+        #     prim_path="{ENV_REGEX_NS}/Robot/gripper_link/ee_marker",
+        #     init_state=AssetBaseCfg.InitialStateCfg(pos=(0.01, 0.0, -0.08)),
+        #     spawn=sim_utils.SphereCfg(
+        #         radius=0.005,
+        #         visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 1.0, 0.0)),
+        #     ),
+        # )
 
 
 @configclass
@@ -108,7 +120,7 @@ class SoArm101PickPlaceEnvCfg_PLAY(SoArm101PickPlaceEnvCfg):
         # post init of parent
         super().__post_init__()
         # make a smaller scene for play
-        self.scene.num_envs = 10
+        self.scene.num_envs = 2
         self.scene.env_spacing = 2.5
         # disable randomization for play
         self.observations.policy.enable_corruption = False

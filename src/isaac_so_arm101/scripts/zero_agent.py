@@ -52,11 +52,13 @@ def main():
     env.reset()
 
     # set viewport 2 to show the wrist camera of env_0
-    import omni.kit.viewport.utility as vp_utils
-    viewport2 = vp_utils.get_viewport_from_window_name("Viewport 2")
-    if viewport2 is None:
-        viewport2 = vp_utils.create_viewport_window("Viewport 2")
-    viewport2.viewport_api.set_active_camera("/World/envs/env_0/Robot/wrist_link/cam_marker/tip/wrist_cam")
+    SEE_CAMERA_VIEW = False
+    if SEE_CAMERA_VIEW :
+        import omni.kit.viewport.utility as vp_utils
+        viewport2 = vp_utils.get_viewport_from_window_name("Viewport 2")
+        if viewport2 is None:
+            viewport2 = vp_utils.create_viewport_window("Viewport 2")
+        viewport2.viewport_api.set_active_camera("/World/envs/env_0/Robot/wrist_link/cam_marker/tip/wrist_cam")
 
     # simulate environment
     while simulation_app.is_running():
