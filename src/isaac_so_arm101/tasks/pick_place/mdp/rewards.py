@@ -28,11 +28,14 @@ if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
 
-def block_ee_distance_tanh(
+def reach(
     env: "ManagerBasedRLEnv",
     std: float,
+    cylinder_radius: float,
     block_cfg: SceneEntityCfg = SceneEntityCfg("block"),
+    bowl_cfg: SceneEntityCfg = SceneEntityCfg("bowl_floor"),
     ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
+    
 ) -> torch.Tensor:
     """``1 - tanh(|ee - block| / std)`` — dense reach signal, always on."""
     block: RigidObject = env.scene[block_cfg.name]
@@ -40,26 +43,23 @@ def block_ee_distance_tanh(
     distance = torch.norm(
         block.data.root_pos_w - ee_frame.data.target_pos_w[..., 0, :], dim=1
     )
-    return 1.0 - torch.tanh(distance / std)
 
-
-def block_is_lifted(
-    env: "ManagerBasedRLEnv",
-    minimal_height: float,
-    block_cfg: SceneEntityCfg = SceneEntityCfg("block"),
-) -> torch.Tensor:
-    """``1.0`` while the block is above ``minimal_height``, else ``0.0``."""
-    block: RigidObject = env.scene[block_cfg.name]
-    return torch.where(
-        block.data.root_pos_w[:, 2] > minimal_height, 1.0, 0.0
+    bowl: RigidObject = env.scene[bowl_cfg.name]
+    xy_dist = torch.norm(
+        block.data.root_pos_w[:, :2] - bowl.data.root_pos_w[:, :2], dim=1
     )
 
+    in_cylinder = (xy_dist <= cylinder_radius).float() 
+    return (1.0 - torch.tanh(distance / std)) * (1-in_cylinder)
 
-def block_height_shaped(
+
+def lift(
     env: "ManagerBasedRLEnv",
     max_height: float,
     rest_height: float = 0.02,
+    cylinder_radius: float = 0.04, 
     block_cfg: SceneEntityCfg = SceneEntityCfg("block"),
+    bowl_cfg: SceneEntityCfg = SceneEntityCfg("bowl_floor"),
 ) -> torch.Tensor:
     """Dense lift signal in ``[0, 1]``: ``clamp(block.z - rest_height, 0, max_height) / max_height``.
 
@@ -70,13 +70,22 @@ def block_height_shaped(
     height_above_rest = (block.data.root_pos_w[:, 2] - rest_height).clamp(
         min=0.0, max=max_height
     )
-    return height_above_rest / max_height
+
+    bowl: RigidObject = env.scene[bowl_cfg.name]
+    xy_dist = torch.norm(
+        block.data.root_pos_w[:, :2] - bowl.data.root_pos_w[:, :2], dim=1
+    )
+
+    in_cylinder = (xy_dist <= cylinder_radius).float() 
+
+    return (height_above_rest / max_height) * (1-in_cylinder)
 
 
-def block_to_goal_xy_distance_tanh(
+def go_above_goal(
     env: "ManagerBasedRLEnv",
     std: float,
     minimal_height: float,
+    cylinder_radius:float,
     block_cfg: SceneEntityCfg = SceneEntityCfg("block"),
     bowl_cfg: SceneEntityCfg = SceneEntityCfg("bowl_floor"),
 ) -> torch.Tensor:
@@ -86,15 +95,23 @@ def block_to_goal_xy_distance_tanh(
     xy_dist = torch.norm(
         block.data.root_pos_w[:, :2] - bowl.data.root_pos_w[:, :2], dim=1
     )
+
+
     lifted = (block.data.root_pos_w[:, 2] > minimal_height).float()
-    return lifted * (1.0 - torch.tanh(xy_dist / std))
+    in_cylinder = xy_dist <= cylinder_radius 
 
 
-def block_above_goal_distance_tanh(
+    gate = ((lifted > 0) | (in_cylinder > 0)).float()
+
+    
+    return gate * (1.0 - torch.tanh(xy_dist / std)) 
+
+
+def drop(
     env: "ManagerBasedRLEnv",
     std: float,
-    height_above_goal: float = 0.03,
-    minimal_height: float = 0.04,
+    z_cylinder: float = 0.01,
+    cylinder_radius: float = 0.04,
     block_cfg: SceneEntityCfg = SceneEntityCfg("block"),
     bowl_cfg: SceneEntityCfg = SceneEntityCfg("bowl_floor"),
 ) -> torch.Tensor:
@@ -104,48 +121,41 @@ def block_above_goal_distance_tanh(
     bowl: RigidObject = env.scene[bowl_cfg.name]
 
     target_pos = bowl.data.root_pos_w.clone()
-    target_pos[:, 2] = target_pos[:, 2] + height_above_goal
+    target_pos[:, 2] = z_cylinder
     distance = torch.norm(block.data.root_pos_w - target_pos, dim=1)
 
-    lifted = (block.data.root_pos_w[:, 2] > minimal_height).float()
-    return lifted * (1.0 - torch.tanh(distance / std))
+    xy_dist = torch.norm(
+        block.data.root_pos_w[:, :2] - bowl.data.root_pos_w[:, :2], dim=1
+    )
+
+    in_cylinder = (xy_dist <= cylinder_radius).float() 
+
+    gate = ((z_cylinder > 0) | (in_cylinder > 0)).float()
+
+    return in_cylinder * (1.0 - torch.tanh(distance / std))
 
 
-def gripper_open_at_drop(
-    env: "ManagerBasedRLEnv",
-    radius: float = 0.02,
-    height_above_goal: float = 0.03,
-    open_value: float = 0.5,
-    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot", joint_names=["gripper"]),
+def success(
+    env: ManagerBasedRLEnv,
+    xy_threshold: float = 0.04,
+    z_cylinder: float = 0.05,
     block_cfg: SceneEntityCfg = SceneEntityCfg("block"),
     bowl_cfg: SceneEntityCfg = SceneEntityCfg("bowl_floor"),
 ) -> torch.Tensor:
-    """Dense-in-gripper, hard-gated-on-position: ``(|block - drop_target| < radius) * openness``.
-
-    * Gate: block must be within ``radius`` of ``bowl + height_above_goal``.
-    * ``openness = clamp(gripper_pos / open_value, 0, 1)`` — 0 fully closed, 1 fully
-      open. Provides a smooth gradient toward opening *only* once the block is at
-      the drop pose, so the policy isn't pushed to open during transport.
-    """
-    robot: RigidObject = env.scene[robot_cfg.name]
     block: RigidObject = env.scene[block_cfg.name]
     bowl: RigidObject = env.scene[bowl_cfg.name]
+    block_pos = block.data.root_pos_w
+    bowl_pos = bowl.data.root_pos_w
 
-    target_pos = bowl.data.root_pos_w.clone()
-    target_pos[:, 2] = target_pos[:, 2] + height_above_goal
-    at_drop = (torch.norm(block.data.root_pos_w - target_pos, dim=1) < radius).float()
 
-    gripper_pos = robot.data.joint_pos[:, robot_cfg.joint_ids[0]]
-    # Only the upper band of the gripper range counts as "open" — while gripping
-    # the cube the joint settles partially closed, so a linear ramp would pay
-    # out for holding. Ramp from 0.8*open_value → open_value.
-    open_threshold = 0.8 * open_value
-    openness = (
-        (gripper_pos - open_threshold) / (open_value - open_threshold)
-    ).clamp(0.0, 1.0)
+    xy_distance = torch.norm(block_pos[:, :2] - bowl_pos[:, :2], dim=1)
+    inside_xy = xy_distance < xy_threshold
 
-    return at_drop * openness
 
+    dz = block_pos[:, 2]
+    inside_z = (dz > -0.01) & (dz < z_cylinder)
+
+    return inside_xy & inside_z
 
 def block_in_bowl(
     env: "ManagerBasedRLEnv",

@@ -320,6 +320,7 @@ class EventCfg:
     )
 
 
+CYLINDER_RADIUS = 0.04
 @configclass
 class RewardsCfg:
     """Additive rewards — mirror of the upstream Isaac Lab Lift task pattern.
@@ -329,54 +330,36 @@ class RewardsCfg:
     high-weight term that dominates once the block sits in the bowl.
     """
 
+    # new connfig
+
     reach = RewTerm(
-        func=mdp.block_ee_distance_tanh,
-        params={"std": 0.05},
+        func=mdp.reach,
+        params={"std": 0.05,"cylinder_radius": CYLINDER_RADIUS},
         weight=1.0,
     )
 
     lift = RewTerm(
-        func=mdp.block_height_shaped,
-        params={"max_height": 0.05, "rest_height": 0.02},
+        func=mdp.lift,
+        params={"max_height": 0.04, "rest_height": 0.02,"cylinder_radius": CYLINDER_RADIUS},
         weight=15.0,
     )
-    
 
-    goal_xy_coarse = RewTerm(
-        func=mdp.block_to_goal_xy_distance_tanh,
-        params={"std": 0.30, "minimal_height": 0.04},
+    go_above_goal = RewTerm(
+        func=mdp.go_above_goal,
+        params={"std": 0.04, "minimal_height": 0.04,"cylinder_radius": CYLINDER_RADIUS},
         weight=30.0,
     )
 
-    goal_xy_fine = RewTerm(
-        func=mdp.block_to_goal_xy_distance_tanh,
-        params={"std": 0.05, "minimal_height": 0.04},
-        weight=35.0,
+    drop = RewTerm(
+        func=mdp.drop,
+        params={"std": 0.04, "z_cylinder": 0.015,"cylinder_radius": CYLINDER_RADIUS},
+        weight=100.0,
     )
-
-    # here add the let go the cube
-    block_above_goal = RewTerm(
-        func=mdp.block_above_goal_distance_tanh,
-        params={"std": 0.05, "height_above_goal": 0.03, "minimal_height": 0.03},
-        weight=40.0,
-    )
-
-    gripper_open_at_drop = RewTerm(
-        func=mdp.gripper_open_at_drop,
-        params={
-            "radius": 0.03,
-            "height_above_goal": 0.03,
-            "open_value": 0.5,
-            "robot_cfg": SceneEntityCfg("robot", joint_names=["gripper"]),
-        },
-        weight=120.0,
-    )
-    # 
 
     success = RewTerm(
-        func=mdp.block_in_bowl,
-        params={"xy_threshold": 0.02, "z_max_above_bowl": 0.01},
-        weight=200.0,
+        func=mdp.success,
+        params={"xy_threshold": 0.04, "z_cylinder": 0.015},
+        weight=100.0,
     )
 
     action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1e-4)
@@ -385,6 +368,8 @@ class RewardsCfg:
         weight=-1e-4,
         params={"asset_cfg": SceneEntityCfg("robot")},
     )
+
+    time_penalty = RewTerm(func=mdp.is_alive, weight=-0.5)
 
 
 @configclass
@@ -400,7 +385,7 @@ class TerminationsCfg:
 
     success = DoneTerm(
         func=mdp.success_block_in_bowl,
-        params={"xy_threshold": 0.04, "z_max_above_bowl": 0.01},
+        params={"xy_threshold": 0.04, "z_max_above_bowl": 0.015},
     )
 
     block_stalled = DoneTerm(
