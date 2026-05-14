@@ -11,7 +11,7 @@ from isaaclab.sim.spawners.from_files.from_files_cfg import UsdFileCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaac_so_arm101.robots import SO_ARM100_CFG, SO_ARM101_CFG  # noqa: F401
-from isaac_so_arm101.tasks.pick_place.pick_place_env_cfg import PickPlaceEnvCfg
+from isaac_so_arm101.tasks.eval2.pick_place_env_cfg import PickPlaceEnvCfg
 
 from isaaclab.markers.config import FRAME_MARKER_CFG  # isort: skip
 
@@ -42,7 +42,8 @@ class SoArm101PickPlaceEnvCfg(PickPlaceEnvCfg):
             close_command_expr={"gripper": 0.0},
         )
 
-        # Set Cube as object
+        # Primary cube. Initial color is a placeholder — overridden each reset by
+        # the randomize_block_color event.
         self.scene.block = RigidObjectCfg(
             prim_path="{ENV_REGEX_NS}/Block",
             init_state=RigidObjectCfg.InitialStateCfg(pos=[0.20, 0.0, 0.01], rot=[1, 0, 0, 0]),
@@ -60,6 +61,29 @@ class SoArm101PickPlaceEnvCfg(PickPlaceEnvCfg):
                 collision_props=sim_utils.CollisionPropertiesCfg(),
                 visual_material=sim_utils.PreviewSurfaceCfg(
                     diffuse_color=(1.0, 0.0, 0.0), metallic=0.0
+                ),
+            ),
+        )
+
+        # Second cube. Spawned to the +x side of ``block`` by default; the
+        # reset_paired_blocks event re-poses both each episode.
+        self.scene.block_b = RigidObjectCfg(
+            prim_path="{ENV_REGEX_NS}/BlockB",
+            init_state=RigidObjectCfg.InitialStateCfg(pos=[0.221, 0.0, 0.01], rot=[1, 0, 0, 0]),
+            spawn=sim_utils.CuboidCfg(
+                size=(0.02, 0.02, 0.02),
+                rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                    solver_position_iteration_count=16,
+                    solver_velocity_iteration_count=1,
+                    max_angular_velocity=1000.0,
+                    max_linear_velocity=1000.0,
+                    max_depenetration_velocity=5.0,
+                    disable_gravity=False,
+                ),
+                mass_props=sim_utils.MassPropertiesCfg(mass=0.05),
+                collision_props=sim_utils.CollisionPropertiesCfg(),
+                visual_material=sim_utils.PreviewSurfaceCfg(
+                    diffuse_color=(0.0, 0.0, 1.0), metallic=0.0
                 ),
             ),
         )
@@ -120,7 +144,7 @@ class SoArm101PickPlaceEnvCfg_PLAY(SoArm101PickPlaceEnvCfg):
         # post init of parent
         super().__post_init__()
         # make a smaller scene for play
-        self.scene.num_envs = 10
+        self.scene.num_envs = 2
         self.scene.env_spacing = 2.5
         # disable randomization for play
         self.observations.policy.enable_corruption = False
@@ -194,7 +218,7 @@ class SoArm100PickPlaceEnvCfg_PLAY(SoArm100PickPlaceEnvCfg):
         # post init of parent
         super().__post_init__()
         # make a smaller scene for play
-        self.scene.num_envs = 10
+        self.scene.num_envs = 2
         self.scene.env_spacing = 2.5
         # disable randomization for play
         self.observations.policy.enable_corruption = False

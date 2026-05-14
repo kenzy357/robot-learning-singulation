@@ -79,6 +79,29 @@ def success_block_in_bowl(
     return inside_xy & inside_z
 
 
+def success_target_in_bowl(
+    env: ManagerBasedRLEnv,
+    xy_threshold: float = 0.04,
+    z_max_above_bowl: float = 0.05,
+    bowl_cfg: SceneEntityCfg = SceneEntityCfg("bowl_floor"),
+) -> torch.Tensor:
+    """Episode succeeds when the *target* (color-matching) cube is in the bowl."""
+    bowl: RigidObject = env.scene[bowl_cfg.name]
+    a: RigidObject = env.scene["block"]
+    b: RigidObject = env.scene["block_b"]
+    if not hasattr(env, "target_idx"):
+        target_pos = a.data.root_pos_w
+    else:
+        is_a = (env.target_idx == 0).unsqueeze(-1)
+        target_pos = torch.where(is_a, a.data.root_pos_w, b.data.root_pos_w)
+    bowl_pos = bowl.data.root_pos_w
+    xy_distance = torch.norm(target_pos[:, :2] - bowl_pos[:, :2], dim=1)
+    inside_xy = xy_distance < xy_threshold
+    dz = target_pos[:, 2] - bowl_pos[:, 2]
+    inside_z = (dz > -0.01) & (dz < z_max_above_bowl)
+    return inside_xy & inside_z
+
+
 def block_in_target_radius(
     env: ManagerBasedRLEnv,
     radius: float = 0.05,
@@ -90,42 +113,6 @@ def block_in_target_radius(
     bowl: RigidObject = env.scene[bowl_cfg.name]
     distance = torch.norm(block.data.root_pos_w - bowl.data.root_pos_w, dim=1)
     return distance < radius
-
-
-def block_stalled(
-    env: ManagerBasedRLEnv,
-    stall_time_s: float = 7.0,
-    move_threshold: float = 0.005,
-    block_cfg: SceneEntityCfg = SceneEntityCfg("block"),
-) -> torch.Tensor:
-    """Terminate when the block has not displaced more than ``move_threshold`` (m)
-    over the last ``stall_time_s`` seconds. Uses per-env counters reset on episode reset."""
-    block: RigidObject = env.scene[block_cfg.name]
-    pos = block.data.root_pos_w[:, :3]
-    num_envs = pos.shape[0]
-    device = pos.device
-
-    if not hasattr(env, "_block_stall_last_pos") or env._block_stall_last_pos.shape[0] != num_envs:
-        env._block_stall_last_pos = pos.clone()
-        env._block_stall_steps = torch.zeros(num_envs, dtype=torch.long, device=device)
-
-    # reset per-env state at episode start
-    just_reset = env.episode_length_buf <= 1
-    env._block_stall_last_pos = torch.where(just_reset.unsqueeze(-1), pos, env._block_stall_last_pos)
-    env._block_stall_steps = torch.where(
-        just_reset, torch.zeros_like(env._block_stall_steps), env._block_stall_steps
-    )
-
-    disp = torch.norm(pos - env._block_stall_last_pos, dim=1)
-    moved = disp > move_threshold
-
-    env._block_stall_steps = torch.where(
-        moved, torch.zeros_like(env._block_stall_steps), env._block_stall_steps + 1
-    )
-    env._block_stall_last_pos = torch.where(moved.unsqueeze(-1), pos, env._block_stall_last_pos)
-
-    stall_steps = int(stall_time_s / env.step_dt)
-    return env._block_stall_steps >= stall_steps
 
 
 # ---------------------------------------------------------------------------

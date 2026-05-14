@@ -55,6 +55,24 @@ def block_is_lifted(
     )
 
 
+def block_height_shaped(
+    env: "ManagerBasedRLEnv",
+    max_height: float,
+    rest_height: float = 0.02,
+    block_cfg: SceneEntityCfg = SceneEntityCfg("block"),
+) -> torch.Tensor:
+    """Dense lift signal in ``[0, 1]``: ``clamp(block.z - rest_height, 0, max_height) / max_height``.
+
+    Provides gradient for any upward motion of the block, so the policy can
+    discover lifting before a hard threshold is crossed.
+    """
+    block: RigidObject = env.scene[block_cfg.name]
+    height_above_rest = (block.data.root_pos_w[:, 2] - rest_height).clamp(
+        min=0.0, max=max_height
+    )
+    return height_above_rest / max_height
+
+
 def block_to_goal_xy_distance_tanh(
     env: "ManagerBasedRLEnv",
     std: float,
@@ -70,6 +88,57 @@ def block_to_goal_xy_distance_tanh(
     )
     lifted = (block.data.root_pos_w[:, 2] > minimal_height).float()
     return lifted * (1.0 - torch.tanh(xy_dist / std))
+
+
+def block_above_goal_distance_tanh(
+    env: "ManagerBasedRLEnv",
+    std: float,
+    height_above_goal: float = 0.03,
+    minimal_height: float = 0.04,
+    block_cfg: SceneEntityCfg = SceneEntityCfg("block"),
+    bowl_cfg: SceneEntityCfg = SceneEntityCfg("bowl_floor"),
+) -> torch.Tensor:
+    """Dense reward to drive the *block* to a point ``height_above_goal`` (m) above
+    the bowl center. Gated on the block being lifted so it only activates after pickup."""
+    block: RigidObject = env.scene[block_cfg.name]
+    bowl: RigidObject = env.scene[bowl_cfg.name]
+
+    target_pos = bowl.data.root_pos_w.clone()
+    target_pos[:, 2] = target_pos[:, 2] + height_above_goal
+    distance = torch.norm(block.data.root_pos_w - target_pos, dim=1)
+
+    lifted = (block.data.root_pos_w[:, 2] > minimal_height).float()
+    return lifted * (1.0 - torch.tanh(distance / std))
+
+
+def gripper_open_at_drop(
+    env: "ManagerBasedRLEnv",
+    radius: float = 0.02,
+    height_above_goal: float = 0.03,
+    open_value: float = 0.5,
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot", joint_names=["gripper"]),
+    block_cfg: SceneEntityCfg = SceneEntityCfg("block"),
+    bowl_cfg: SceneEntityCfg = SceneEntityCfg("bowl_floor"),
+) -> torch.Tensor:
+    """Dense-in-gripper, hard-gated-on-position: ``(|block - drop_target| < radius) * openness``.
+
+    * Gate: block must be within ``radius`` of ``bowl + height_above_goal``.
+    * ``openness = clamp(gripper_pos / open_value, 0, 1)`` — 0 fully closed, 1 fully
+      open. Provides a smooth gradient toward opening *only* once the block is at
+      the drop pose, so the policy isn't pushed to open during transport.
+    """
+    robot: RigidObject = env.scene[robot_cfg.name]
+    block: RigidObject = env.scene[block_cfg.name]
+    bowl: RigidObject = env.scene[bowl_cfg.name]
+
+    target_pos = bowl.data.root_pos_w.clone()
+    target_pos[:, 2] = target_pos[:, 2] + height_above_goal
+    at_drop = (torch.norm(block.data.root_pos_w - target_pos, dim=1) < radius).float()
+
+    gripper_pos = robot.data.joint_pos[:, robot_cfg.joint_ids[0]]
+    openness = (gripper_pos / open_value).clamp(0.0, 1.0)
+
+    return at_drop * openness
 
 
 def block_in_bowl(

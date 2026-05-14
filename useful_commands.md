@@ -13,13 +13,23 @@ uv run train --task Isaac-SO-ARM101-PickPlace-v0 --headless --enable_cameras
 uv run train --task Isaac-SO-ARM101-PickPlace-v0 --headless --enable_cameras --num_envs 16 --max_iterations 100
 
 uv run train --task Isaac-SO-ARM101-PickPlace-v0 --headless --enable_cameras --num_envs 64 --max_iterations 5000
-
+  uv run train --task Isaac-SO-ARM101-PickPlace-v0 --headless --enable_cameras --num_envs 128 --max_iterations 10000 --resume
 
 # test the trained policy (loads the latest checkpoint from logs/rsl_rl/<experiment_name>/<latest_run>/)
 uv run play --task Isaac-SO-ARM101-PickPlace-Play-v0 --enable_cameras
 
 # play specific checkpoint 
 uv run play --task Isaac-SO-ARM101-PickPlace-Play-v0 --enable_cameras \ --checkpoint logs/rsl_rl/pick_place/<run>/model_500.pt
+
+# eval 2
+uv run train --task Isaac-SO-ARM101-Eval2-v0 --headless --enable_cameras --num_envs 64 --max_iterations 5000
+
+
+
+
+
+
+
 
 
 # Viewing the camera feed

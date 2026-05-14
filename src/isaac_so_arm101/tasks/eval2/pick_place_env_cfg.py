@@ -13,8 +13,8 @@ from dataclasses import MISSING
 import isaaclab.sim as sim_utils
 
 # from . import mdp
-import isaac_so_arm101.tasks.pick_place.mdp as mdp
-from isaac_so_arm101.tasks.pick_place.mdp.feature_extractors import DINOV2_MODEL_ZOO
+import isaac_so_arm101.tasks.eval2.mdp as mdp
+from isaac_so_arm101.tasks.eval2.mdp.feature_extractors import DINOV2_MODEL_ZOO
 from isaaclab.assets import (
     ArticulationCfg,
     AssetBaseCfg,
@@ -121,8 +121,10 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
     robot: ArticulationCfg = MISSING
     # end-effector sensor: will be populated by agent env cfg
     ee_frame: FrameTransformerCfg = MISSING
-    # target object: will be populated by agent env cfg
+    # primary cube: will be populated by agent env cfg
     block: RigidObjectCfg | DeformableObjectCfg = MISSING
+    # second cube (always spawned adjacent to ``block``)
+    block_b: RigidObjectCfg | DeformableObjectCfg = MISSING
 
     # Bowl floor: circular cylinder sized to match the reward radius. Collision
     # is enabled so the cube physically rests inside; the 8 wall segments below
@@ -282,6 +284,7 @@ class ObservationsCfg:
         joint_vel = ObsTerm(func=mdp.joint_vel_rel)
         ee_position = ObsTerm(func=mdp.ee_position_in_robot_root_frame)
         goal_position = ObsTerm(func=mdp.goal_position_in_robot_root_frame)
+        target_color = ObsTerm(func=mdp.target_color)
         actions = ObsTerm(func=mdp.last_action, history_length=4)
 
         image_features = ObsTerm(
@@ -302,20 +305,60 @@ class ObservationsCfg:
     policy: PolicyCfg = PolicyCfg()
 
 
+_CUBE_COLOR_PALETTE = [
+    (1.0, 0.0, 0.0),    # red
+    (1.0, 0.45, 0.0),   # orange
+    (1.0, 1.0, 0.0),    # yellow
+    (0.0, 0.8, 0.0),    # green
+    (0.55, 0.0, 0.75),  # purple
+    (0.0, 0.2, 1.0),    # blue
+]
+
+
 @configclass
 class EventCfg:
-    """Reset behavior: scene defaults + (optionally) randomize block."""
+    """Reset behavior: scene defaults, paired-block placement, bowl move, colors."""
 
     reset_all = EventTerm(func=mdp.reset_scene_to_default, mode="reset")
 
-    reset_block_position = EventTerm(
-        func=mdp.reset_root_state_uniform,
+    # Place block_a + block_b adjacent at a randomized pair-center.
+    reset_paired_blocks = EventTerm(
+        func=mdp.reset_paired_blocks_uniform,
         mode="reset",
         params={
-            # "pose_range": {"x": (-0.05, 0.05), "y": (-0.05, 0.05), "z": (0.0, 0.0)},
-            "pose_range": {"x": (0.0, 0.0), "y": (0.0, 0.0), "z": (0.0, 0.0)},
-            "velocity_range": {},
-            "asset_cfg": SceneEntityCfg("block"),
+            "pose_range": {"x": (-0.05, 0.05), "y": (-0.05, 0.05), "z": (0.0, 0.0)},
+            "cube_size": 0.02,
+            "epsilon": 0.001,
+            "block_a_cfg": SceneEntityCfg("block"),
+            "block_b_cfg": SceneEntityCfg("block_b"),
+        },
+    )
+
+    # Move bowl_floor and all 8 walls together by a sampled xy offset.
+    reset_bowl_assembly = EventTerm(
+        func=mdp.reset_bowl_assembly_uniform,
+        mode="reset",
+        params={
+            "pose_range": {"x": (-0.05, 0.05), "y": (-0.05, 0.05), "z": (0.0, 0.0)},
+            "asset_names": [
+                "bowl_floor",
+                "bowl_wall_0", "bowl_wall_1", "bowl_wall_2", "bowl_wall_3",
+                "bowl_wall_4", "bowl_wall_5", "bowl_wall_6", "bowl_wall_7",
+            ],
+        },
+    )
+
+    # Pick one of two cubes as the target each episode. Samples palette colors
+    # for both cubes (different indices) and the target_idx, then applies the
+    # colors visually. Populates ``env.target_idx`` and ``env.target_color``
+    # used by ``mdp.target_color`` obs and the ``target_*`` rewards.
+    randomize_cubes_and_target = EventTerm(
+        func=mdp.randomize_cube_colors_and_target,
+        mode="reset",
+        params={
+            "palette": _CUBE_COLOR_PALETTE,
+            "block_a_cfg": SceneEntityCfg("block"),
+            "block_b_cfg": SceneEntityCfg("block_b"),
         },
     )
 
@@ -330,51 +373,32 @@ class RewardsCfg:
     """
 
     reach = RewTerm(
-        func=mdp.block_ee_distance_tanh,
+        func=mdp.target_ee_distance_tanh,
         params={"std": 0.05},
         weight=1.0,
     )
 
     lift = RewTerm(
-        func=mdp.block_height_shaped,
-        params={"max_height": 0.05, "rest_height": 0.02},
+        func=mdp.target_is_lifted,
+        params={"minimal_height": 0.04},
         weight=15.0,
     )
-    
 
     goal_xy_coarse = RewTerm(
-        func=mdp.block_to_goal_xy_distance_tanh,
+        func=mdp.target_to_goal_xy_distance_tanh,
         params={"std": 0.30, "minimal_height": 0.04},
-        weight=30.0,
+        weight=10.0,
     )
 
     goal_xy_fine = RewTerm(
-        func=mdp.block_to_goal_xy_distance_tanh,
+        func=mdp.target_to_goal_xy_distance_tanh,
         params={"std": 0.05, "minimal_height": 0.04},
-        weight=35.0,
-    )
-
-    # here add the let go the cube
-    block_above_goal = RewTerm(
-        func=mdp.block_above_goal_distance_tanh,
-        params={"std": 0.05, "height_above_goal": 0.03, "minimal_height": 0.03},
-        weight=40.0,
-    )
-
-    gripper_open_at_drop = RewTerm(
-        func=mdp.gripper_open_at_drop,
-        params={
-            "radius": 0.03,
-            "height_above_goal": 0.03,
-            "open_value": 0.5,
-            "robot_cfg": SceneEntityCfg("robot", joint_names=["gripper"]),
-        },
-        weight=70.0,
+        weight=5.0,
     )
 
     success = RewTerm(
-        func=mdp.block_in_bowl,
-        params={"xy_threshold": 0.02, "z_max_above_bowl": 0.01},
+        func=mdp.target_in_bowl,
+        params={"xy_threshold": 0.04, "z_max_above_bowl": 0.05},
         weight=100.0,
     )
 
@@ -398,13 +422,8 @@ class TerminationsCfg:
     )
 
     success = DoneTerm(
-        func=mdp.success_block_in_bowl,
-        params={"xy_threshold": 0.04, "z_max_above_bowl": 0.01},
-    )
-
-    block_stalled = DoneTerm(
-        func=mdp.block_stalled,
-        params={"stall_time_s": 7.0, "move_threshold": 0.005},
+        func=mdp.success_target_in_bowl,
+        params={"xy_threshold": 0.04, "z_max_above_bowl": 0.05},
     )
 
     # block_in_target_radius = DoneTerm(
@@ -423,7 +442,11 @@ class PickPlaceEnvCfg(ManagerBasedRLEnvCfg):
     """Configuration for the pick and place environment."""
 
     # Scene settings
-    scene: ObjectTableSceneCfg = ObjectTableSceneCfg(num_envs=1024, env_spacing=2.5)
+    # NOTE: ``replicate_physics=False`` is required for per-env color
+    # randomization via ``mdp.randomize_visual_color``.
+    scene: ObjectTableSceneCfg = ObjectTableSceneCfg(
+        num_envs=1024, env_spacing=2.5, replicate_physics=False
+    )
     # Basic settings
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
