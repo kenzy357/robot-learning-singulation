@@ -369,13 +369,14 @@ class RewardsCfg:
             "open_value": 0.5,
             "robot_cfg": SceneEntityCfg("robot", joint_names=["gripper"]),
         },
-        weight=70.0,
+        weight=120.0,
     )
+    # 
 
     success = RewTerm(
         func=mdp.block_in_bowl,
         params={"xy_threshold": 0.02, "z_max_above_bowl": 0.01},
-        weight=100.0,
+        weight=200.0,
     )
 
     action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1e-4)

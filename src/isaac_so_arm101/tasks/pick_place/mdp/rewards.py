@@ -136,7 +136,13 @@ def gripper_open_at_drop(
     at_drop = (torch.norm(block.data.root_pos_w - target_pos, dim=1) < radius).float()
 
     gripper_pos = robot.data.joint_pos[:, robot_cfg.joint_ids[0]]
-    openness = (gripper_pos / open_value).clamp(0.0, 1.0)
+    # Only the upper band of the gripper range counts as "open" — while gripping
+    # the cube the joint settles partially closed, so a linear ramp would pay
+    # out for holding. Ramp from 0.8*open_value → open_value.
+    open_threshold = 0.8 * open_value
+    openness = (
+        (gripper_pos - open_threshold) / (open_value - open_threshold)
+    ).clamp(0.0, 1.0)
 
     return at_drop * openness
 
