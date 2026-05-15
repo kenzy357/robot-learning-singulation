@@ -76,7 +76,7 @@ CAMERA_POS = (-0.066, 0.021, 0.012)
 '''Bowl geometry — octagonal rim approximating a circle of radius BOWL_RADIUS.
    Radius matches the ``block_in_target_radius`` termination so the visual
    matches the success criterion.'''
-BOWL_POS = (0.20, -0.15, 0.0)
+BOWL_POS = (0.27, 0.0, 0.0)
 BOWL_RADIUS = 0.05
 BOWL_WALL_HEIGHT = 0.025
 BOWL_WALL_THICK = 0.003
@@ -301,21 +301,38 @@ class ObservationsCfg:
     # observation groups
     policy: PolicyCfg = PolicyCfg()
 
-
+X_MAX=0.20
+X_MIN=0.15
+Y_MAX=0.08
+Y_MIN=-0.08
 @configclass
 class EventCfg:
     """Reset behavior: scene defaults + (optionally) randomize block."""
 
     reset_all = EventTerm(func=mdp.reset_scene_to_default, mode="reset")
 
-    reset_block_position = EventTerm(
-        func=mdp.reset_root_state_uniform,
+    reset_block_and_bowl = EventTerm(
+        func=mdp.reset_block_and_bowl_uniform,
         mode="reset",
         params={
-            # "pose_range": {"x": (-0.05, 0.05), "y": (-0.05, 0.05), "z": (0.0, 0.0)},
-            "pose_range": {"x": (0.0, 0.0), "y": (0.0, 0.0), "z": (0.0, 0.0)},
-            "velocity_range": {},
-            "asset_cfg": SceneEntityCfg("block"),
+            "block_pose_range": {"x": (X_MIN - 0.15, X_MAX - 0.15), "y": (Y_MIN, Y_MAX)},
+            "bowl_pose_range": {
+                "x": (0.13 - BOWL_POS[0], 0.36 - BOWL_POS[0]),
+                "y": (-0.15, 0.15),
+            },
+            # bowl_radius (0.05) + cube half-extent (0.01) + margin
+            "min_distance": 0.08,
+            "bowl_asset_names": [
+                "bowl_floor",
+                "bowl_wall_0",
+                "bowl_wall_1",
+                "bowl_wall_2",
+                "bowl_wall_3",
+                "bowl_wall_4",
+                "bowl_wall_5",
+                "bowl_wall_6",
+                "bowl_wall_7",
+            ],
         },
     )
 
@@ -369,7 +386,7 @@ class RewardsCfg:
         params={"asset_cfg": SceneEntityCfg("robot")},
     )
 
-    time_penalty = RewTerm(func=mdp.is_alive, weight=-0.5)
+    #time_penalty = RewTerm(func=mdp.is_alive, weight=-0.5)
 
 
 @configclass
@@ -388,10 +405,10 @@ class TerminationsCfg:
         params={"xy_threshold": 0.04, "z_max_above_bowl": 0.015},
     )
 
-    block_stalled = DoneTerm(
-        func=mdp.block_stalled,
-        params={"stall_time_s": 7.0, "move_threshold": 0.005},
-    )
+    # block_stalled = DoneTerm(
+    #     func=mdp.block_stalled,
+    #     params={"stall_time_s": 7.0, "move_threshold": 0.005},
+    # )
 
     # block_in_target_radius = DoneTerm(
     #     func=mdp.block_in_target_radius,

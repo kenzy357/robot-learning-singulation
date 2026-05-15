@@ -45,7 +45,7 @@ class SoArm101PickPlaceEnvCfg(PickPlaceEnvCfg):
         # Set Cube as object
         self.scene.block = RigidObjectCfg(
             prim_path="{ENV_REGEX_NS}/Block",
-            init_state=RigidObjectCfg.InitialStateCfg(pos=[0.20, 0.0, 0.01], rot=[1, 0, 0, 0]),
+            init_state=RigidObjectCfg.InitialStateCfg(pos=[0.15, 0.0, 0.01], rot=[1, 0, 0, 0]),
             spawn=sim_utils.CuboidCfg(
                 size=(0.02, 0.02, 0.02),
                 rigid_props=sim_utils.RigidBodyPropertiesCfg(

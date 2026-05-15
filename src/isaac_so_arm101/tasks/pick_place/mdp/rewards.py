@@ -68,7 +68,7 @@ def lift(
     """
     block: RigidObject = env.scene[block_cfg.name]
     height_above_rest = (block.data.root_pos_w[:, 2] - rest_height).clamp(
-        min=0.0, max=max_height
+        min=-0.5, max=max_height
     )
 
     bowl: RigidObject = env.scene[bowl_cfg.name]
