@@ -392,34 +392,45 @@ CYLINDER_RADIUS = 0.04
 # Cube half-extent (m). The block is spawned as a 0.02 m cube (see
 # joint_pos_env_cfg.py), so the half-size is 0.01.
 CUBE_HALF = 0.01
+
+# Geometry params shared by the four staged Place reward terms — kept in sync
+# with the scene constants above.
+_PLACE_PARAMS = {
+    "cube_half_size": CUBE_HALF,
+    "bowl_radius": BOWL_RADIUS,
+    "rim_height": BOWL_WALL_HEIGHT,
+}
+
+
 @configclass
 class RewardsCfg:
-    """Squint ``Place`` reward.
+    """Squint ``Place`` reward, split into per-stage terms.
 
-    ``place`` is the full staged dense reward — a single term because the
-    upstream stages override (not add to) each other. It also folds in the
-    contact penalties (-6 robot↔table, -3 robot↔bowl) and the not-lifted
-    penalty (-1), exactly as ``compute_dense_reward`` applies them after the
-    staged overrides; see ``mdp/rewards.py``.
+    The staged dense reward (later stages OVERRIDE earlier ones) produces four
+    mutually-exclusive regions, so it is decomposed into four ``place_stage_*``
+    terms plus three penalties. Exactly one stage term is nonzero per env, so
+    the seven terms SUM to the original single staged reward bit-for-bit — the
+    split exists only so each part is logged separately in wandb as
+    ``Episode_Reward/<term>``. See ``mdp/rewards.py``.
 
     ``action_rate`` / ``joint_vel`` are small CAPS-style regularizers — they
     are NOT part of upstream's dense reward, kept as separate additive terms.
     """
 
-    place = RewTerm(
-        func=mdp.place_dense_reward,
-        params={
-            "cube_half_size": CUBE_HALF,
-            "bowl_radius": BOWL_RADIUS,
-            "rim_height": BOWL_WALL_HEIGHT,
-            "ee_frame_cfg": SceneEntityCfg("ee_frame"),
-            "cube_cfg": SceneEntityCfg("block"),
-            "bowl_cfg": SceneEntityCfg("bowl_floor"),
-            "robot_cfg": SceneEntityCfg("robot"),
-        },
-        weight=1.0,
+    # --- staged dense reward (mutually exclusive; sum == upstream reward) ---
+    reach = RewTerm(func=mdp.place_stage_reach, weight=1.0, params=_PLACE_PARAMS)
+    grasp = RewTerm(func=mdp.place_stage_grasp, weight=1.0, params=_PLACE_PARAMS)
+    above_bin = RewTerm(func=mdp.place_stage_above_bin, weight=1.0, params=_PLACE_PARAMS)
+    success_bonus = RewTerm(func=mdp.place_stage_success, weight=1.0, params=_PLACE_PARAMS)
+
+    # --- penalties (applied after the staged overrides, as upstream) -------
+    pen_touch_table = RewTerm(func=mdp.robot_touching_table, weight=-6.0)
+    pen_touch_bin = RewTerm(func=mdp.robot_touching_bin, weight=-3.0)
+    pen_not_lifted = RewTerm(
+        func=mdp.not_lifted, weight=-1.0, params={"cube_half_size": CUBE_HALF}
     )
 
+    # --- regularizers (not part of upstream's dense reward) ----------------
     action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1e-4)
 
     joint_vel = RewTerm(

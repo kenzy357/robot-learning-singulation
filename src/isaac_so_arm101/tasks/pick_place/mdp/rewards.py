@@ -8,8 +8,8 @@
 Faithful port of ``Place.compute_dense_reward`` / ``Place.evaluate`` from the
 upstream ManiSkill3/SAPIEN env (``squint/envs/place.py``).
 
-Unlike the first port, this version reads real PhysX *filtered* contact forces
-instead of geometric proxies, so the contact-dependent logic matches upstream:
+This version reads real PhysX *filtered* contact forces instead of geometric
+proxies, so the contact-dependent logic matches upstream:
 
   * ``robot_touching_item``  -> gripper/jaw ContactSensors filtered vs the cube
   * ``robot_touching_bin``   -> gripper/jaw ContactSensors filtered vs the bowl
@@ -18,11 +18,11 @@ instead of geometric proxies, so the contact-dependent logic matches upstream:
                                 a proxy for SAPIEN's two-finger ``is_grasping``
 
 The upstream reward is *staged*: later stages OVERRIDE earlier values rather
-than adding. Isaac Lab's reward manager sums terms, so the whole staged
-computation is one term (``place_dense_reward``, weight 1.0). The contact
-penalties (-6 table, -3 bin) and the not-lifted penalty (-1) are folded into
-that single term, exactly as ``compute_dense_reward`` applies them after the
-staged overrides.
+than adding. The staged ``torch.where`` ladder produces four mutually
+exclusive regions (exactly one active per env), so it is decomposed here into
+four additive ``place_stage_*`` terms plus three penalties. Their SUM equals
+the original single staged reward bit-for-bit — the split exists only so each
+part is logged separately in wandb (``Episode_Reward/<term>``).
 
 Staged ladder (matches upstream):
 
@@ -37,12 +37,9 @@ Staged ladder (matches upstream):
 
 where ``place_reward = (1 - tanh(5 d_goal)) + (1 - tanh(10 d_goal_z))``.
 
-Sensor wiring: ``place_dense_reward`` / ``place_success`` read six
-``ContactSensor``s defined in ``ObjectTableSceneCfg`` — one per (gripper body)
-x (filter target). See ``pick_place_env_cfg.py``.
-
-The CAPS-style action-rate penalty is NOT part of upstream's dense reward; it
-is kept as a separate additive term (``mdp.action_rate_l2``) in the env cfg.
+``_place_components`` computes every piece once; the term functions below are
+thin wrappers that select one piece each. The CAPS-style action-rate penalty
+is NOT part of upstream's dense reward; keep it as a separate term in the cfg.
 """
 
 from __future__ import annotations
@@ -56,6 +53,11 @@ from isaaclab.sensors import ContactSensor, FrameTransformer
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
+
+# Default ContactSensor scene-entity names (see ObjectTableSceneCfg).
+_ITEM_SENSORS = ("gripper_item_contact", "jaw_item_contact")
+_BOWL_SENSORS = ("gripper_bowl_contact", "jaw_bowl_contact")
+_TABLE_SENSORS = ("gripper_table_contact", "jaw_table_contact")
 
 
 # ---------------------------------------------------------------------------
@@ -80,7 +82,7 @@ def _body_touching(
 
 def robot_touching_item(
     env: "ManagerBasedRLEnv",
-    item_sensor_names: tuple[str, ...] = ("gripper_item_contact", "jaw_item_contact"),
+    item_sensor_names: tuple[str, ...] = _ITEM_SENSORS,
     force_threshold: float = 1.0,
 ) -> torch.Tensor:
     """``1.0`` if EITHER gripper body is in contact with the cube.
@@ -95,12 +97,13 @@ def robot_touching_item(
 
 def robot_touching_bin(
     env: "ManagerBasedRLEnv",
-    bin_sensor_names: tuple[str, ...] = ("gripper_bowl_contact", "jaw_bowl_contact"),
+    bin_sensor_names: tuple[str, ...] = _BOWL_SENSORS,
     force_threshold: float = 1.0,
 ) -> torch.Tensor:
     """``1.0`` if EITHER gripper body is in contact with any bowl part.
 
-    Isaac Lab port of SAPIEN's ``agent.is_touching(bin)``.
+    Isaac Lab port of SAPIEN's ``agent.is_touching(bin)``. Use with weight
+    ``-3.0`` to restore upstream's ``- 3 * robot_touching_bin`` penalty.
     """
     touching = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
     for name in bin_sensor_names:
@@ -110,12 +113,13 @@ def robot_touching_bin(
 
 def robot_touching_table(
     env: "ManagerBasedRLEnv",
-    table_sensor_names: tuple[str, ...] = ("gripper_table_contact", "jaw_table_contact"),
+    table_sensor_names: tuple[str, ...] = _TABLE_SENSORS,
     force_threshold: float = 1.0,
 ) -> torch.Tensor:
     """``1.0`` if EITHER gripper body is in contact with the table.
 
-    Isaac Lab port of SAPIEN's ``agent.is_touching(table)``.
+    Isaac Lab port of SAPIEN's ``agent.is_touching(table)``. Use with weight
+    ``-6.0`` to restore upstream's ``- 6 * robot_touching_table`` penalty.
     """
     touching = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
     for name in table_sensor_names:
@@ -125,7 +129,7 @@ def robot_touching_table(
 
 def item_grasped(
     env: "ManagerBasedRLEnv",
-    item_sensor_names: tuple[str, ...] = ("gripper_item_contact", "jaw_item_contact"),
+    item_sensor_names: tuple[str, ...] = _ITEM_SENSORS,
     force_threshold: float = 1.0,
 ) -> torch.Tensor:
     """``1.0`` when BOTH gripper bodies are in contact with the cube.
@@ -141,6 +145,21 @@ def item_grasped(
     return grasped.float()
 
 
+def not_lifted(
+    env: "ManagerBasedRLEnv",
+    cube_half_size: float = 0.01,
+    cube_cfg: SceneEntityCfg = SceneEntityCfg("block"),
+) -> torch.Tensor:
+    """``1.0`` while the cube has NOT been lifted off the table.
+
+    Upstream's "encourage picking the item up fast" penalty — use with weight
+    ``-1.0``. ``item_lifted`` is ``cube.z >= cube_half_size + 1e-3``.
+    """
+    cube: RigidObject = env.scene[cube_cfg.name]
+    item_lifted = cube.data.root_pos_w[:, 2] >= (cube_half_size + 1e-3)
+    return (~item_lifted).float()
+
+
 # ---------------------------------------------------------------------------
 # Success predicate — shared by the success termination and the reward
 # ---------------------------------------------------------------------------
@@ -149,8 +168,8 @@ def place_success(
     bowl_radius: float = 0.05,
     robot_static_threshold: float = 2e-2,
     force_threshold: float = 1.0,
-    item_sensor_names: tuple[str, ...] = ("gripper_item_contact", "jaw_item_contact"),
-    bowl_sensor_names: tuple[str, ...] = ("gripper_bowl_contact", "jaw_bowl_contact"),
+    item_sensor_names: tuple[str, ...] = _ITEM_SENSORS,
+    bowl_sensor_names: tuple[str, ...] = _BOWL_SENSORS,
     gripper_joint_name: str = "gripper",
     robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     cube_cfg: SceneEntityCfg = SceneEntityCfg("block"),
@@ -161,9 +180,8 @@ def place_success(
         success = is_item_above_bin & ~robot_touching_item
                   & is_robot_static & ~robot_touching_bin
 
-    Used as BOTH the success termination and the success stage of
-    ``place_dense_reward`` — mirroring how upstream reuses ``info["success"]``
-    in ``compute_dense_reward``.
+    Used as BOTH the success termination and the success stage of the staged
+    reward — mirroring how upstream reuses ``info["success"]``.
 
     ``is_item_above_bin`` is the circular analog of upstream's rectangular
     ``inside_x & inside_y``: the cube xy is within ``bowl_radius`` of the bowl
@@ -190,9 +208,9 @@ def place_success(
 
 
 # ---------------------------------------------------------------------------
-# Main staged dense reward — faithful port of Place.compute_dense_reward
+# Staged dense reward — faithful port of Place.compute_dense_reward
 # ---------------------------------------------------------------------------
-def place_dense_reward(
+def _place_components(
     env: "ManagerBasedRLEnv",
     cube_half_size: float = 0.01,
     bowl_radius: float = 0.05,
@@ -200,20 +218,21 @@ def place_dense_reward(
     force_threshold: float = 1.0,
     robot_static_threshold: float = 2e-2,
     gripper_joint_name: str = "gripper",
-    item_sensor_names: tuple[str, ...] = ("gripper_item_contact", "jaw_item_contact"),
-    bowl_sensor_names: tuple[str, ...] = ("gripper_bowl_contact", "jaw_bowl_contact"),
-    table_sensor_names: tuple[str, ...] = ("gripper_table_contact", "jaw_table_contact"),
+    item_sensor_names: tuple[str, ...] = _ITEM_SENSORS,
+    bowl_sensor_names: tuple[str, ...] = _BOWL_SENSORS,
+    table_sensor_names: tuple[str, ...] = _TABLE_SENSORS,
     ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
     cube_cfg: SceneEntityCfg = SceneEntityCfg("block"),
     bowl_cfg: SceneEntityCfg = SceneEntityCfg("bowl_floor"),
     robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-) -> torch.Tensor:
-    """Staged dense reward for placing the cube into the bowl — see module docstring.
+) -> dict[str, torch.Tensor]:
+    """Compute every piece of the staged Place reward once.
 
-    Args:
-        cube_half_size: Cube half-extent (m). Cube is ``2*cube_half_size`` per side.
-        bowl_radius:    Bowl footprint radius (m) — the "cube is over the bowl" gate.
-        rim_height:     Bowl wall height (m).
+    Returns a dict whose four ``stage_*`` entries are mutually exclusive
+    (exactly one is nonzero per env): ``stage_base + stage_grasp +
+    stage_above + stage_success`` reproduces the staged ``torch.where``
+    ladder, and subtracting the three penalty entries reproduces upstream's
+    ``compute_dense_reward`` bit-for-bit.
     """
     robot: Articulation = env.scene[robot_cfg.name]
     ee_frame: FrameTransformer = env.scene[ee_frame_cfg.name]
@@ -226,23 +245,20 @@ def place_dense_reward(
 
     # --- reaching reward: 2 * (1 - tanh(5 d_ee_cube)) ----------------------
     tcp_to_item_dist = torch.norm(ee_pos - item_pos, dim=-1)
-    reward = 2.0 * (1.0 - torch.tanh(5.0 * tcp_to_item_dist))
+    reach = 2.0 * (1.0 - torch.tanh(5.0 * tcp_to_item_dist))
 
     # --- placement target: bowl centre xy, bowl-rim z ----------------------
     goal_xyz = bowl_pos.clone()
     goal_xyz[:, 2] = bowl_pos[:, 2] + rim_height + cube_half_size
 
-    # overall distance reward
     item_to_goal_dist = torch.norm(goal_xyz - item_pos, dim=-1)
     place_reward_final = 1.0 - torch.tanh(5.0 * item_to_goal_dist)
 
     # xy / z split with far/close logic (encourages lift-then-lower)
     item_to_goal_dist_xy = torch.norm(goal_xyz[:, :2] - item_pos[:, :2], dim=-1)
-    # Far: aim above the bowl rim so the policy lifts before traversing.
     item_to_goal_dist_z_far = torch.abs(
         (goal_xyz[:, 2] + rim_height + 0.03) - item_pos[:, 2]
     )
-    # Close: aim at the final placement height.
     item_to_goal_dist_z_close = torch.abs(goal_xyz[:, 2] - item_pos[:, 2])
     item_close_to_goal = item_to_goal_dist_xy <= bowl_radius
     item_to_goal_dist_z = torch.where(
@@ -266,24 +282,12 @@ def place_dense_reward(
     touching_item = robot_touching_item(env, item_sensor_names, force_threshold)
     touching_bin = robot_touching_bin(env, bowl_sensor_names, force_threshold)
     touching_table = robot_touching_table(env, table_sensor_names, force_threshold)
+    is_item_dropped = 1.0 - touching_item  # release bonus: (~touching_item)
 
-    # release bonus: 1.0 once the robot is no longer touching the cube
-    is_item_dropped = 1.0 - touching_item
-
-    # robot-static reward (arm joints only — exclude the gripper joint)
     arm_idx = [i for i in range(robot.data.joint_vel.shape[-1]) if i != gripper_idx]
     robot_v = torch.norm(robot.data.joint_vel[:, arm_idx], dim=-1)
     static_robot_reward = 1.0 - torch.tanh(robot_v * 10.0)
 
-    # --- staged overrides (later stages replace earlier values) ------------
-    reward = torch.where(is_grasped, 3.0 + place_reward, reward)
-
-    above_bin_reward = (
-        4.0 + place_reward + is_item_dropped + gripper_openness + static_robot_reward
-    )
-    reward = torch.where(is_item_above_bin, above_bin_reward, reward)
-
-    # success -> flat 9 (same predicate as the success termination)
     success = place_success(
         env,
         bowl_radius=bowl_radius,
@@ -296,13 +300,97 @@ def place_dense_reward(
         cube_cfg=cube_cfg,
         bowl_cfg=bowl_cfg,
     )
-    reward = torch.where(success, torch.full_like(reward, 9.0), reward)
 
-    # --- always-on penalties (applied after the staged overrides) ----------
-    reward = reward - 6.0 * touching_table
-    reward = reward - 3.0 * touching_bin
-    reward = reward - 1.0 * (~item_lifted).float()
-    return reward
+    # --- staged values -----------------------------------------------------
+    grasped_value = 3.0 + place_reward
+    above_value = (
+        4.0 + place_reward + is_item_dropped + gripper_openness + static_robot_reward
+    )
+
+    # mutually exclusive region masks (matches the torch.where ladder:
+    # base -> grasped -> above_bin -> success, later stages override earlier)
+    region_success = success
+    region_above = is_item_above_bin & (~success)
+    region_grasp = is_grasped & (~is_item_above_bin) & (~success)
+    region_base = (~is_grasped) & (~is_item_above_bin) & (~success)
+
+    zeros = torch.zeros_like(reach)
+    return {
+        "stage_base": torch.where(region_base, reach, zeros),
+        "stage_grasp": torch.where(region_grasp, grasped_value, zeros),
+        "stage_above": torch.where(region_above, above_value, zeros),
+        "stage_success": torch.where(region_success, torch.full_like(reach, 9.0), zeros),
+        "touching_table": touching_table,
+        "touching_bin": touching_bin,
+        "not_lifted": (~item_lifted).float(),
+    }
+
+
+def place_stage_reach(
+    env: "ManagerBasedRLEnv",
+    cube_half_size: float = 0.01,
+    bowl_radius: float = 0.05,
+    rim_height: float = 0.025,
+) -> torch.Tensor:
+    """Base stage: ``2*(1 - tanh(5 d_ee_cube))``, active only before grasp."""
+    return _place_components(
+        env, cube_half_size=cube_half_size, bowl_radius=bowl_radius, rim_height=rim_height
+    )["stage_base"]
+
+
+def place_stage_grasp(
+    env: "ManagerBasedRLEnv",
+    cube_half_size: float = 0.01,
+    bowl_radius: float = 0.05,
+    rim_height: float = 0.025,
+) -> torch.Tensor:
+    """Grasped stage: ``3 + place_reward``, active while grasped & not over bowl."""
+    return _place_components(
+        env, cube_half_size=cube_half_size, bowl_radius=bowl_radius, rim_height=rim_height
+    )["stage_grasp"]
+
+
+def place_stage_above_bin(
+    env: "ManagerBasedRLEnv",
+    cube_half_size: float = 0.01,
+    bowl_radius: float = 0.05,
+    rim_height: float = 0.025,
+) -> torch.Tensor:
+    """Above-bowl stage: ``4 + place_reward + (~touch_item) + openness + static``."""
+    return _place_components(
+        env, cube_half_size=cube_half_size, bowl_radius=bowl_radius, rim_height=rim_height
+    )["stage_above"]
+
+
+def place_stage_success(
+    env: "ManagerBasedRLEnv",
+    cube_half_size: float = 0.01,
+    bowl_radius: float = 0.05,
+    rim_height: float = 0.025,
+) -> torch.Tensor:
+    """Success stage: flat ``9`` (same predicate as the success termination)."""
+    return _place_components(
+        env, cube_half_size=cube_half_size, bowl_radius=bowl_radius, rim_height=rim_height
+    )["stage_success"]
+
+
+def place_dense_reward(env: "ManagerBasedRLEnv", **kwargs) -> torch.Tensor:
+    """Full staged dense reward — the sum of the four stage terms minus the
+    three penalties. Equals upstream's ``compute_dense_reward``.
+
+    The env cfg uses the split ``place_stage_*`` terms (so each logs to wandb
+    separately); this single-call form is kept for reference / eval scripts.
+    """
+    c = _place_components(env, **kwargs)
+    return (
+        c["stage_base"]
+        + c["stage_grasp"]
+        + c["stage_above"]
+        + c["stage_success"]
+        - 6.0 * c["touching_table"]
+        - 3.0 * c["touching_bin"]
+        - c["not_lifted"]
+    )
 
 
 def place_normalized_dense_reward(
