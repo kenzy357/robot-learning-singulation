@@ -9,6 +9,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from dataclasses import MISSING
+from pathlib import Path
 
 import isaaclab.sim as sim_utils
 
@@ -37,7 +38,6 @@ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 ## added for pick and place
 from isaaclab.sensors import ContactSensorCfg, TiledCameraCfg
 import torch
-import math
 
 
 # from isaaclab.utils.offset import OffsetCfg
@@ -73,22 +73,20 @@ CAMERA_ROT = euler_to_quat(90.0, 14.0, 90.0)
 CAMERA_POS = (-0.066, 0.021, 0.012)
 
 
-'''Bowl geometry — octagonal rim approximating a circle of radius BOWL_RADIUS.
-   Radius matches the ``block_in_target_radius`` termination so the visual
-   matches the success criterion.'''
+'''Bowl geometry — real-scan mesh asset (``assets/bowl.usd``, converted from
+   the squint ``Place`` env's ``bowl.obj`` by ``scripts/convert_bowl_to_usd.py``).
+   The mesh origin is the bowl bottom-centre; its AABB is ~0.150 x 0.150 x
+   0.053 m. ``BOWL_RADIUS`` is the success/reward footprint radius and
+   ``BOWL_RIM_HEIGHT`` the wall height — both feed the staged Place reward and
+   the success termination so the visual matches the success criterion.'''
+BOWL_USD_PATH = str(Path(__file__).resolve().parent / "assets" / "bowl.usd")
 BOWL_POS = (0.29, 0.0, 0.0)
-BOWL_RADIUS = 0.05
-BOWL_WALL_HEIGHT = 0.025
-BOWL_WALL_THICK = 0.003
-BOWL_FLOOR_THICK = 0.003
-BOWL_N_WALLS = 8
-BOWL_COLOR = (0.732, 0.482, 0.243)  # linear RGB for sRGB #DEB887 (burlywood)
+BOWL_RADIUS = 0.07          # success footprint (mesh AABB half-extent ~0.075)
+BOWL_RIM_HEIGHT = 0.053     # mesh wall height (AABB z-extent)
 
-# ContactSensor filter targets. Each gripper body gets one sensor per target
-# set, so robot↔bowl, robot↔cube and robot↔table contacts stay isolated.
-BOWL_PART_PATHS = ["{ENV_REGEX_NS}/BowlFloor"] + [
-    f"{{ENV_REGEX_NS}}/BowlWall{i}" for i in range(BOWL_N_WALLS)
-]
+# ContactSensor filter target — the single mesh bowl prim. Keeps robot↔bowl,
+# robot↔cube and robot↔table contacts isolated across separate sensors.
+BOWL_PART_PATHS = ["{ENV_REGEX_NS}/Bowl"]
 BLOCK_PART_PATHS = ["{ENV_REGEX_NS}/Block"]
 TABLE_PART_PATHS = ["{ENV_REGEX_NS}/Table"]
 
@@ -107,33 +105,6 @@ def _contact_cfg(body: str, filter_paths: list[str]) -> ContactSensorCfg:
     )
 
 
-def _bowl_wall_cfg(idx: int, n: int = BOWL_N_WALLS) -> RigidObjectCfg:
-    """One wall segment of the octagonal bowl rim, kinematic + collidable."""
-    theta = 2.0 * math.pi * idx / n
-    width = 2.0 * BOWL_RADIUS * math.sin(math.pi / n) + BOWL_WALL_THICK
-    cx = BOWL_POS[0] + (BOWL_RADIUS + BOWL_WALL_THICK / 2.0) * math.cos(theta)
-    cy = BOWL_POS[1] + (BOWL_RADIUS + BOWL_WALL_THICK / 2.0) * math.sin(theta)
-    cz = BOWL_POS[2] + BOWL_FLOOR_THICK + BOWL_WALL_HEIGHT / 2.0
-    rot = (math.cos(theta / 2.0), 0.0, 0.0, math.sin(theta / 2.0))
-    return RigidObjectCfg(
-        prim_path=f"{{ENV_REGEX_NS}}/BowlWall{idx}",
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[cx, cy, cz], rot=list(rot)),
-        spawn=sim_utils.CuboidCfg(
-            size=(BOWL_WALL_THICK, width, BOWL_WALL_HEIGHT),
-            # contact reporting on so the gripper-vs-bowl ContactSensor works
-            activate_contact_sensors=True,
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                kinematic_enabled=True, disable_gravity=True
-            ),
-            mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
-            collision_props=sim_utils.CollisionPropertiesCfg(),
-            visual_material=sim_utils.PreviewSurfaceCfg(
-                diffuse_color=BOWL_COLOR, roughness=1.0, metallic=0.0
-            ),
-        ),
-    )
-
-
 @configclass
 class ObjectTableSceneCfg(InteractiveSceneCfg):
     """Configuration for the lift scene with a robot and a object.
@@ -148,19 +119,19 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
     # target object: will be populated by agent env cfg
     block: RigidObjectCfg | DeformableObjectCfg = MISSING
 
-    # Bowl floor: circular cylinder sized to match the reward radius. Collision
-    # is enabled so the cube physically rests inside; the 8 wall segments below
-    # form an octagonal rim that keeps the cube from sliding out.
-    bowl_floor = RigidObjectCfg(
-        prim_path="{ENV_REGEX_NS}/BowlFloor",
+    # Bowl — real-scan mesh asset (converted from the squint Place env's
+    # bowl.obj). Kinematic + gravity-disabled so it stays put, exactly like the
+    # procedural octagonal bowl it replaces. The convex-decomposition collider
+    # (baked into the USD) preserves the inner cavity so the cube physically
+    # rests inside. Contact reporting on so the gripper-vs-bowl ContactSensors
+    # work. The mesh origin is the bowl bottom-centre.
+    bowl = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/Bowl",
         init_state=RigidObjectCfg.InitialStateCfg(
-            pos=[BOWL_POS[0], BOWL_POS[1], BOWL_POS[2] + BOWL_FLOOR_THICK / 2.0],
-            rot=[1, 0, 0, 0],
+            pos=list(BOWL_POS), rot=[1, 0, 0, 0]
         ),
-        spawn=sim_utils.CylinderCfg(
-            radius=BOWL_RADIUS,
-            height=BOWL_FLOOR_THICK,
-            # contact reporting on so the gripper-vs-bowl ContactSensor works
+        spawn=UsdFileCfg(
+            usd_path=BOWL_USD_PATH,
             activate_contact_sensors=True,
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 kinematic_enabled=True,
@@ -168,22 +139,8 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
             ),
             mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
             collision_props=sim_utils.CollisionPropertiesCfg(),
-            visual_material=sim_utils.PreviewSurfaceCfg(
-                diffuse_color=BOWL_COLOR,
-                roughness=1.0,
-                metallic=0.0,
-            ),
         ),
     )
-
-    bowl_wall_0 = _bowl_wall_cfg(0)
-    bowl_wall_1 = _bowl_wall_cfg(1)
-    bowl_wall_2 = _bowl_wall_cfg(2)
-    bowl_wall_3 = _bowl_wall_cfg(3)
-    bowl_wall_4 = _bowl_wall_cfg(4)
-    bowl_wall_5 = _bowl_wall_cfg(5)
-    bowl_wall_6 = _bowl_wall_cfg(6)
-    bowl_wall_7 = _bowl_wall_cfg(7)
 
     # Table — primitive cuboid with the exact spec color #B8ADA9.
     # Kinematic RigidObjectCfg (not a plain AssetBaseCfg collider) so it is a
@@ -371,19 +328,9 @@ class EventCfg:
     #             "x": (0.13 - BOWL_POS[0], 0.36 - BOWL_POS[0]),
     #             "y": (-0.15, 0.15),
     #         },
-    #         # bowl_radius (0.05) + cube half-extent (0.01) + margin
-    #         "min_distance": 0.08,
-    #         "bowl_asset_names": [
-    #             "bowl_floor",
-    #             "bowl_wall_0",
-    #             "bowl_wall_1",
-    #             "bowl_wall_2",
-    #             "bowl_wall_3",
-    #             "bowl_wall_4",
-    #             "bowl_wall_5",
-    #             "bowl_wall_6",
-    #             "bowl_wall_7",
-    #         ],
+    #         # bowl_radius (0.07) + cube half-extent (0.01) + margin
+    #         "min_distance": 0.10,
+    #         "bowl_asset_names": ["bowl"],
     #     },
     # )
 
@@ -398,7 +345,7 @@ CUBE_HALF = 0.01
 _PLACE_PARAMS = {
     "cube_half_size": CUBE_HALF,
     "bowl_radius": BOWL_RADIUS,
-    "rim_height": BOWL_WALL_HEIGHT,
+    "rim_height": BOWL_RIM_HEIGHT,
 }
 
 
@@ -460,7 +407,7 @@ class TerminationsCfg:
         params={
             "bowl_radius": BOWL_RADIUS,
             "cube_cfg": SceneEntityCfg("block"),
-            "bowl_cfg": SceneEntityCfg("bowl_floor"),
+            "bowl_cfg": SceneEntityCfg("bowl"),
             "robot_cfg": SceneEntityCfg("robot"),
         },
     )

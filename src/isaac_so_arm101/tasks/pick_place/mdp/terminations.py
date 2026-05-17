@@ -66,7 +66,7 @@ def success_block_in_bowl(
     xy_threshold: float = 0.04,
     z_max_above_bowl: float = 0.05,
     block_cfg: SceneEntityCfg = SceneEntityCfg("block"),
-    bowl_cfg: SceneEntityCfg = SceneEntityCfg("bowl_floor"),
+    bowl_cfg: SceneEntityCfg = SceneEntityCfg("bowl"),
 ) -> torch.Tensor:
     block: RigidObject = env.scene[block_cfg.name]
     bowl: RigidObject = env.scene[bowl_cfg.name]
@@ -83,7 +83,7 @@ def block_in_target_radius(
     env: ManagerBasedRLEnv,
     radius: float = 0.05,
     block_cfg: SceneEntityCfg = SceneEntityCfg("block"),
-    bowl_cfg: SceneEntityCfg = SceneEntityCfg("bowl_floor"),
+    bowl_cfg: SceneEntityCfg = SceneEntityCfg("bowl"),
 ) -> torch.Tensor:
     """Terminate when the block enters a 3D sphere of given radius around the bowl center."""
     block: RigidObject = env.scene[block_cfg.name]
@@ -135,7 +135,7 @@ def success_target_block_in_bowl(
     env: ManagerBasedRLEnv,
     xy_threshold: float = 0.04,
     z_max_above_bowl: float = 0.05,
-    bowl_cfg: SceneEntityCfg = SceneEntityCfg("bowl_floor"),
+    bowl_cfg: SceneEntityCfg = SceneEntityCfg("bowl"),
 ) -> torch.Tensor:
     """Episode succeeds when the *target* (color-matching) block is in the bowl."""
     bowl: RigidObject = env.scene[bowl_cfg.name]

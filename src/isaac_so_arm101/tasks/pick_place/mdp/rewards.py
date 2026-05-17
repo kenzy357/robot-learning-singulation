@@ -173,7 +173,7 @@ def place_success(
     gripper_joint_name: str = "gripper",
     robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     cube_cfg: SceneEntityCfg = SceneEntityCfg("block"),
-    bowl_cfg: SceneEntityCfg = SceneEntityCfg("bowl_floor"),
+    bowl_cfg: SceneEntityCfg = SceneEntityCfg("bowl"),
 ) -> torch.Tensor:
     """Squint ``Place`` success predicate (``evaluate``'s ``success``):
 
@@ -223,7 +223,7 @@ def _place_components(
     table_sensor_names: tuple[str, ...] = _TABLE_SENSORS,
     ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
     cube_cfg: SceneEntityCfg = SceneEntityCfg("block"),
-    bowl_cfg: SceneEntityCfg = SceneEntityCfg("bowl_floor"),
+    bowl_cfg: SceneEntityCfg = SceneEntityCfg("bowl"),
     robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> dict[str, torch.Tensor]:
     """Compute every piece of the staged Place reward once.

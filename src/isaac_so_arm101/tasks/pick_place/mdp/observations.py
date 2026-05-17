@@ -39,7 +39,7 @@ def object_position_in_robot_root_frame(
 def goal_position_in_robot_root_frame(
     env: ManagerBasedRLEnv,
     robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-    goal_cfg: SceneEntityCfg = SceneEntityCfg("bowl_floor"),
+    goal_cfg: SceneEntityCfg = SceneEntityCfg("bowl"),
 ) -> torch.Tensor:
     """The position of the goal (bowl) in the robot's root frame."""
     robot: RigidObject = env.scene[robot_cfg.name]
