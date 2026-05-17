@@ -19,14 +19,51 @@ from isaaclab.markers.config import FRAME_MARKER_CFG  # isort: skip
 import isaaclab.sim as sim_utils
 
 
+import math
+from dataclasses import MISSING
+
+import torch
+
+import isaaclab.sim as sim_utils
+from isaaclab.assets import (
+    ArticulationCfg,
+    AssetBaseCfg,
+    DeformableObjectCfg,
+    RigidObjectCfg,
+)
+from isaaclab.envs import ManagerBasedRLEnvCfg
+from isaaclab.managers import EventTermCfg as EventTerm
+from isaaclab.managers import ObservationGroupCfg as ObsGroup
+from isaaclab.managers import ObservationTermCfg as ObsTerm
+from isaaclab.managers import RewardTermCfg as RewTerm
+from isaaclab.managers import SceneEntityCfg
+from isaaclab.managers import TerminationTermCfg as DoneTerm
+from isaaclab.scene import InteractiveSceneCfg
+from isaaclab.sensors import ContactSensorCfg, TiledCameraCfg
+from isaaclab.sensors.frame_transformer.frame_transformer_cfg import FrameTransformerCfg
+from isaaclab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg
+from isaaclab.utils import configclass
+
+from . import mdp
+from .mdp.feature_extractors import DINOV2_MODEL_ZOO
+
+
+
 @configclass
 class SoArm101PickPlaceEnvCfg(PickPlaceEnvCfg):
     def __post_init__(self):
         # post init of parent
         super().__post_init__()
 
-        # Set so arm as robot
-        self.scene.robot = SO_ARM101_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+        # Set so arm as robot — enable contact reporting so the gripper-vs-bowl
+        # ContactSensors (gripper_contact / jaw_contact) work.
+        # NOTE: SO_ARM101_CFG ships with activate_contact_sensors=False ("waiting
+        # for capsule implementation"). If training crashes at startup with a
+        # capsule/contact error, drop the `spawn=...` override below.
+        self.scene.robot = SO_ARM101_CFG.replace(
+            prim_path="{ENV_REGEX_NS}/Robot",
+            spawn=SO_ARM101_CFG.spawn.replace(activate_contact_sensors=True),
+        )
 
         # override actions
         self.actions.arm_action = mdp.JointPositionActionCfg(
@@ -45,7 +82,7 @@ class SoArm101PickPlaceEnvCfg(PickPlaceEnvCfg):
         # Set Cube as object
         self.scene.block = RigidObjectCfg(
             prim_path="{ENV_REGEX_NS}/Block",
-            init_state=RigidObjectCfg.InitialStateCfg(pos=[0.15, 0.0, 0.01], rot=[1, 0, 0, 0]),
+            init_state=RigidObjectCfg.InitialStateCfg(pos=[0.17, 0.0, 0.01], rot=[1, 0, 0, 0]),
             spawn=sim_utils.CuboidCfg(
                 size=(0.02, 0.02, 0.02),
                 rigid_props=sim_utils.RigidBodyPropertiesCfg(

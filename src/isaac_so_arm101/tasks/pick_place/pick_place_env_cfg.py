@@ -35,7 +35,7 @@ from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
 ## added for pick and place
-from isaaclab.sensors import TiledCameraCfg
+from isaaclab.sensors import ContactSensorCfg, TiledCameraCfg
 import torch
 import math
 
@@ -76,13 +76,19 @@ CAMERA_POS = (-0.066, 0.021, 0.012)
 '''Bowl geometry — octagonal rim approximating a circle of radius BOWL_RADIUS.
    Radius matches the ``block_in_target_radius`` termination so the visual
    matches the success criterion.'''
-BOWL_POS = (0.27, 0.0, 0.0)
+BOWL_POS = (0.29, 0.0, 0.0)
 BOWL_RADIUS = 0.05
 BOWL_WALL_HEIGHT = 0.025
 BOWL_WALL_THICK = 0.003
 BOWL_FLOOR_THICK = 0.003
 BOWL_N_WALLS = 8
 BOWL_COLOR = (0.732, 0.482, 0.243)  # linear RGB for sRGB #DEB887 (burlywood)
+
+# Bowl part prim paths — used as ContactSensor filter targets so the
+# robot-touches-bowl penalty isolates robot↔bowl contacts.
+BOWL_PART_PATHS = ["{ENV_REGEX_NS}/BowlFloor"] + [
+    f"{{ENV_REGEX_NS}}/BowlWall{i}" for i in range(BOWL_N_WALLS)
+]
 
 
 def _bowl_wall_cfg(idx: int, n: int = BOWL_N_WALLS) -> RigidObjectCfg:
@@ -98,6 +104,8 @@ def _bowl_wall_cfg(idx: int, n: int = BOWL_N_WALLS) -> RigidObjectCfg:
         init_state=RigidObjectCfg.InitialStateCfg(pos=[cx, cy, cz], rot=list(rot)),
         spawn=sim_utils.CuboidCfg(
             size=(BOWL_WALL_THICK, width, BOWL_WALL_HEIGHT),
+            # contact reporting on so the gripper-vs-bowl ContactSensor works
+            activate_contact_sensors=True,
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 kinematic_enabled=True, disable_gravity=True
             ),
@@ -136,6 +144,8 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
         spawn=sim_utils.CylinderCfg(
             radius=BOWL_RADIUS,
             height=BOWL_FLOOR_THICK,
+            # contact reporting on so the gripper-vs-bowl ContactSensor works
+            activate_contact_sensors=True,
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 kinematic_enabled=True,
                 disable_gravity=True,
@@ -230,9 +240,25 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
         offset=TiledCameraCfg.OffsetCfg(
                                         rot=(0.0, 0.0, 0.0, 1.0),  ## may need to be arranged
                                         convention="ros"),
-        # offset=TiledCameraCfg.OffsetCfg(pos=CAMERA_POS, 
+        # offset=TiledCameraCfg.OffsetCfg(pos=CAMERA_POS,
         #                                 rot=CAMERA_ROT,  ## may need to be arranged
         #                                 convention="ros"),
+    )
+
+    # Gripper-vs-bowl contact sensors — one per gripper body, each filtered
+    # against the bowl parts so only robot↔bowl contacts register. Read by
+    # the ``robot_touches_bowl`` reward (``touch_bowl`` term). Requires
+    # contact reporting enabled on both the gripper bodies (robot spawn, set
+    # in joint_pos_env_cfg) and the bowl parts (set above).
+    gripper_contact: ContactSensorCfg = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/gripper_link",
+        update_period=0.0,
+        filter_prim_paths_expr=BOWL_PART_PATHS,
+    )
+    jaw_contact: ContactSensorCfg = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/moving_jaw_so101_v1_link",
+        update_period=0.0,
+        filter_prim_paths_expr=BOWL_PART_PATHS,
     )
 
 
@@ -305,88 +331,87 @@ X_MAX=0.20
 X_MIN=0.15
 Y_MAX=0.08
 Y_MIN=-0.08
+
+
 @configclass
 class EventCfg:
     """Reset behavior: scene defaults + (optionally) randomize block."""
 
     reset_all = EventTerm(func=mdp.reset_scene_to_default, mode="reset")
 
-    reset_block_and_bowl = EventTerm(
-        func=mdp.reset_block_and_bowl_uniform,
-        mode="reset",
-        params={
-            "block_pose_range": {"x": (X_MIN - 0.15, X_MAX - 0.15), "y": (Y_MIN, Y_MAX)},
-            "bowl_pose_range": {
-                "x": (0.13 - BOWL_POS[0], 0.36 - BOWL_POS[0]),
-                "y": (-0.15, 0.15),
-            },
-            # bowl_radius (0.05) + cube half-extent (0.01) + margin
-            "min_distance": 0.08,
-            "bowl_asset_names": [
-                "bowl_floor",
-                "bowl_wall_0",
-                "bowl_wall_1",
-                "bowl_wall_2",
-                "bowl_wall_3",
-                "bowl_wall_4",
-                "bowl_wall_5",
-                "bowl_wall_6",
-                "bowl_wall_7",
-            ],
-        },
-    )
+    # reset_block_and_bowl = EventTerm(
+    #     func=mdp.reset_block_and_bowl_uniform,
+    #     mode="reset",
+    #     params={
+    #         "block_pose_range": {"x": (X_MIN - 0.17, X_MAX - 0.17), "y": (Y_MIN, Y_MAX)},
+    #         "bowl_pose_range": {
+    #             "x": (0.13 - BOWL_POS[0], 0.36 - BOWL_POS[0]),
+    #             "y": (-0.15, 0.15),
+    #         },
+    #         # bowl_radius (0.05) + cube half-extent (0.01) + margin
+    #         "min_distance": 0.08,
+    #         "bowl_asset_names": [
+    #             "bowl_floor",
+    #             "bowl_wall_0",
+    #             "bowl_wall_1",
+    #             "bowl_wall_2",
+    #             "bowl_wall_3",
+    #             "bowl_wall_4",
+    #             "bowl_wall_5",
+    #             "bowl_wall_6",
+    #             "bowl_wall_7",
+    #         ],
+    #     },
+    # )
 
 
 CYLINDER_RADIUS = 0.04
+# Cube half-extent (m). The block is spawned as a 0.02 m cube (see
+# joint_pos_env_cfg.py), so the half-size is 0.01.
+CUBE_HALF = 0.01
 @configclass
 class RewardsCfg:
-    """Additive rewards — mirror of the upstream Isaac Lab Lift task pattern.
+    """Squint ``Place`` reward.
 
-    All terms are always-on; ``goal_xy_*`` is multiplied by a lifted flag so it
-    only contributes once the block is off the table. ``success`` is the sparse
-    high-weight term that dominates once the block sits in the bowl.
+    ``place`` is the full staged dense reward — a single term because the
+    upstream stages override (not add to) each other; see ``mdp/rewards.py``.
+    ``action_rate`` is the CAPS-style action-rate penalty upstream folds into
+    the dense reward (``action_smooth_coef = 0.67`` at 30 Hz control).
     """
 
-    # new connfig
-
-    reach = RewTerm(
-        func=mdp.reach,
-        params={"std": 0.05,"cylinder_radius": CYLINDER_RADIUS},
+    place = RewTerm(
+        func=mdp.place_dense_reward,
+        params={
+            "cube_half_size": CUBE_HALF,
+            "bowl_radius": BOWL_RADIUS,
+            "rim_height": BOWL_WALL_HEIGHT,
+            "ee_frame_cfg": SceneEntityCfg("ee_frame"),
+            "cube_cfg": SceneEntityCfg("block"),
+            "bowl_cfg": SceneEntityCfg("bowl_floor"),
+            "robot_cfg": SceneEntityCfg("robot"),
+        },
         weight=1.0,
     )
 
-    lift = RewTerm(
-        func=mdp.lift,
-        params={"max_height": 0.04, "rest_height": 0.02,"cylinder_radius": CYLINDER_RADIUS},
-        weight=15.0,
-    )
-
-    go_above_goal = RewTerm(
-        func=mdp.go_above_goal,
-        params={"std": 0.04, "minimal_height": 0.04,"cylinder_radius": CYLINDER_RADIUS},
-        weight=30.0,
-    )
-
-    drop = RewTerm(
-        func=mdp.drop,
-        params={"std": 0.04, "z_cylinder": 0.015,"cylinder_radius": CYLINDER_RADIUS},
-        weight=100.0,
-    )
-
-    success = RewTerm(
-        func=mdp.success,
-        params={"xy_threshold": 0.04, "z_cylinder": 0.015},
-        weight=100.0,
+    # Robot-touches-bowl penalty — restores upstream's `- 3 * robot_touching_bin`
+    # (a flat per-step cost whenever a gripper body contacts the bowl).
+    touch_bowl = RewTerm(
+        func=mdp.robot_touches_bowl,
+        params={
+            "sensor_names": ("gripper_contact", "jaw_contact"),
+            "force_threshold": 1.0,
+        },
+        weight=-3.0,
     )
 
     action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1e-4)
+
     joint_vel = RewTerm(
         func=mdp.joint_vel_l2,
         weight=-1e-4,
         params={"asset_cfg": SceneEntityCfg("robot")},
     )
 
-    #time_penalty = RewTerm(func=mdp.is_alive, weight=-0.5)
 
 
 @configclass
