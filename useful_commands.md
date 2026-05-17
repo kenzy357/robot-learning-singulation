@@ -30,7 +30,11 @@ uv run play --task Isaac-SO-ARM101-PickPlace-Play-v0 --enable_cameras \ --checkp
 uv run train --task Isaac-SO-ARM101-Eval2-v0 --headless --enable_cameras --num_envs 64 --max_iterations 5000
 
 
-
+#### privileged teacher
+# teacher
+uv run train --task Isaac-SO-ARM101-PickPlace-Teacher-v0 --headless --enable_cameras --num_envs 128 --max_iterations 10000
+# student
+uv run train --task Isaac-SO-ARM101-PickPlace-Distill-v0 --headless --enable_cameras --num_envs 128 --max_iterations 10000
 
 
 

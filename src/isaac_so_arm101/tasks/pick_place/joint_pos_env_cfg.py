@@ -165,6 +165,28 @@ class SoArm101PickPlaceEnvCfg_PLAY(SoArm101PickPlaceEnvCfg):
         self.observations.policy.enable_corruption = False
 
 
+@configclass
+class SoArm101PickPlaceTeacherEnvCfg(SoArm101PickPlaceEnvCfg):
+    """Privileged-teacher variant for phase 1 of the teacher-student workflow.
+
+    Identical scene and dynamics to ``SoArm101PickPlaceEnvCfg``, but the heavy
+    DINOv2 ``image_features`` observation is dropped: the teacher is trained
+    purely on the ``privileged`` ObsGroup (ground-truth low-dim state), so the
+    per-step ViT forward pass is pure waste here. The teacher PPO agent cfg
+    routes ``obs_groups`` to the ``privileged`` group.
+
+    The wrist camera sensor itself is left in the scene (so this still needs
+    ``--enable_cameras``); only the expensive feature-extraction obs term is
+    removed. Removing the camera sensor too would speed teacher training
+    further but is left out to keep the scene identical to the student env.
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        # drop the DINOv2 image-feature term — teacher uses privileged state
+        self.observations.policy.image_features = None
+
+
 #################### useless ################################################################################
 @configclass
 class SoArm100PickPlaceEnvCfg(PickPlaceEnvCfg):

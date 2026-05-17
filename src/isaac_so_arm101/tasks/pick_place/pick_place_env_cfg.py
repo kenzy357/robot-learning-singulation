@@ -304,8 +304,36 @@ class ObservationsCfg:
             self.enable_corruption = True
             self.concatenate_terms = True
 
+    @configclass
+    class PrivilegedCfg(ObsGroup):
+        """Privileged teacher observations — ground-truth low-dim state.
+
+        Consumed only by the teacher in the teacher-student workflow (the
+        teacher PPO run and the ``teacher`` slot of the distillation run, see
+        the ``obs_groups`` mappings in the agent cfgs). The vision student must
+        infer all of this from the wrist camera instead. No DINOv2 image
+        features here — that is what makes the teacher cheap to train.
+        """
+
+        joint_pos = ObsTerm(func=mdp.joint_pos_rel)
+        joint_vel = ObsTerm(func=mdp.joint_vel_rel)
+        ee_position = ObsTerm(func=mdp.ee_position_in_robot_root_frame)
+        goal_position = ObsTerm(func=mdp.goal_position_in_robot_root_frame)
+        cube_position = ObsTerm(func=mdp.cube_position_in_robot_root_frame)
+        cube_orientation = ObsTerm(func=mdp.cube_orientation_in_robot_root_frame)
+        cube_lin_vel = ObsTerm(func=mdp.cube_lin_vel)
+        gripper_openness = ObsTerm(func=mdp.gripper_openness)
+        contact_states = ObsTerm(func=mdp.privileged_contact_states)
+        actions = ObsTerm(func=mdp.last_action, history_length=4)
+
+        def __post_init__(self):
+            # teacher gets clean ground-truth state — no observation noise
+            self.enable_corruption = False
+            self.concatenate_terms = True
+
     # observation groups
     policy: PolicyCfg = PolicyCfg()
+    privileged: PrivilegedCfg = PrivilegedCfg()
 
 X_MAX=0.20
 X_MIN=0.15
