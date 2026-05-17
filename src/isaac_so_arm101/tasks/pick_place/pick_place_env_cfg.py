@@ -424,10 +424,19 @@ class RewardsCfg:
     success_bonus = RewTerm(func=mdp.place_stage_success, weight=1.0, params=_PLACE_PARAMS)
 
     # --- penalties (applied after the staged overrides, as upstream) -------
-    pen_touch_table = RewTerm(func=mdp.robot_touching_table, weight=-6.0)
+    #pen_touch_table = RewTerm(func=mdp.robot_touching_table, weight=-6.0)
     pen_touch_bin = RewTerm(func=mdp.robot_touching_bin, weight=-3.0)
     pen_not_lifted = RewTerm(
         func=mdp.not_lifted, weight=-1.0, params={"cube_half_size": CUBE_HALF}
+    )
+
+    # Big one-shot penalty fired on the step the ``block_dropped`` termination
+    # triggers (block falls below ``minimum_height``). ``is_terminated_term``
+    # excludes time-outs, so this only hits genuine drops, not episode timeout.
+    pen_block_dropped = RewTerm(
+        func=mdp.is_terminated_term,
+        weight=-7.0,
+        params={"term_keys": "block_dropped"},
     )
 
     # --- regularizers (not part of upstream's dense reward) ----------------
