@@ -84,11 +84,27 @@ BOWL_FLOOR_THICK = 0.003
 BOWL_N_WALLS = 8
 BOWL_COLOR = (0.732, 0.482, 0.243)  # linear RGB for sRGB #DEB887 (burlywood)
 
-# Bowl part prim paths — used as ContactSensor filter targets so the
-# robot-touches-bowl penalty isolates robot↔bowl contacts.
+# ContactSensor filter targets. Each gripper body gets one sensor per target
+# set, so robot↔bowl, robot↔cube and robot↔table contacts stay isolated.
 BOWL_PART_PATHS = ["{ENV_REGEX_NS}/BowlFloor"] + [
     f"{{ENV_REGEX_NS}}/BowlWall{i}" for i in range(BOWL_N_WALLS)
 ]
+BLOCK_PART_PATHS = ["{ENV_REGEX_NS}/Block"]
+TABLE_PART_PATHS = ["{ENV_REGEX_NS}/Table"]
+
+# Gripper body prim names the contact sensors are mounted on.
+_GRIPPER_BODY = "gripper_link"
+_JAW_BODY = "moving_jaw_so101_v1_link"
+
+
+def _contact_cfg(body: str, filter_paths: list[str]) -> ContactSensorCfg:
+    """A ContactSensor on one gripper body, reporting PhysX *filtered* contact
+    forces against only ``filter_paths`` (one filter-target set)."""
+    return ContactSensorCfg(
+        prim_path=f"{{ENV_REGEX_NS}}/Robot/{body}",
+        update_period=0.0,
+        filter_prim_paths_expr=filter_paths,
+    )
 
 
 def _bowl_wall_cfg(idx: int, n: int = BOWL_N_WALLS) -> RigidObjectCfg:
@@ -170,13 +186,22 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
     bowl_wall_7 = _bowl_wall_cfg(7)
 
     # Table — primitive cuboid with the exact spec color #B8ADA9.
-    # See pick_in_clutter_env_cfg.py for the rationale (sized + positioned so
-    # the cluster + cluster-randomization stays on the table).
-    table = AssetBaseCfg(
+    # Kinematic RigidObjectCfg (not a plain AssetBaseCfg collider) so it is a
+    # valid contact-sensor target: activate_contact_sensors needs a rigid body
+    # to attach to. Kinematic + gravity-disabled keeps it immovable, exactly
+    # like the bowl floor/walls above.
+    table = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/Table",
-        init_state=AssetBaseCfg.InitialStateCfg(pos=[0.40, 0, -0.02]),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.40, 0, -0.02]),
         spawn=sim_utils.CuboidCfg(
             size=(0.80, 1.00, 0.04),
+            # contact reporting on so the gripper-vs-table ContactSensor works
+            activate_contact_sensors=True,
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                kinematic_enabled=True,
+                disable_gravity=True,
+            ),
+            mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
             collision_props=sim_utils.CollisionPropertiesCfg(),
             visual_material=sim_utils.PreviewSurfaceCfg(
                 diffuse_color=(0.485, 0.426, 0.408),  # #B8ADA9
@@ -245,21 +270,19 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
         #                                 convention="ros"),
     )
 
-    # Gripper-vs-bowl contact sensors — one per gripper body, each filtered
-    # against the bowl parts so only robot↔bowl contacts register. Read by
-    # the ``robot_touches_bowl`` reward (``touch_bowl`` term). Requires
-    # contact reporting enabled on both the gripper bodies (robot spawn, set
-    # in joint_pos_env_cfg) and the bowl parts (set above).
-    gripper_contact: ContactSensorCfg = ContactSensorCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/gripper_link",
-        update_period=0.0,
-        filter_prim_paths_expr=BOWL_PART_PATHS,
-    )
-    jaw_contact: ContactSensorCfg = ContactSensorCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/moving_jaw_so101_v1_link",
-        update_period=0.0,
-        filter_prim_paths_expr=BOWL_PART_PATHS,
-    )
+    # Gripper contact sensors — one per (gripper body) x (filter target).
+    # Each ContactSensor reports PhysX *filtered* contact forces between its
+    # gripper body and only the listed prims, so robot↔bowl, robot↔cube and
+    # robot↔table contacts are isolated. Read by the staged ``place`` reward
+    # and the ``place_success`` termination (see mdp/rewards.py).
+    # Requires contact reporting on the gripper bodies (robot spawn, set in
+    # joint_pos_env_cfg) and on every filter target (bowl/cube/table spawns).
+    gripper_bowl_contact: ContactSensorCfg = _contact_cfg(_GRIPPER_BODY, BOWL_PART_PATHS)
+    jaw_bowl_contact: ContactSensorCfg = _contact_cfg(_JAW_BODY, BOWL_PART_PATHS)
+    gripper_item_contact: ContactSensorCfg = _contact_cfg(_GRIPPER_BODY, BLOCK_PART_PATHS)
+    jaw_item_contact: ContactSensorCfg = _contact_cfg(_JAW_BODY, BLOCK_PART_PATHS)
+    gripper_table_contact: ContactSensorCfg = _contact_cfg(_GRIPPER_BODY, TABLE_PART_PATHS)
+    jaw_table_contact: ContactSensorCfg = _contact_cfg(_JAW_BODY, TABLE_PART_PATHS)
 
 
 ##
@@ -374,9 +397,13 @@ class RewardsCfg:
     """Squint ``Place`` reward.
 
     ``place`` is the full staged dense reward — a single term because the
-    upstream stages override (not add to) each other; see ``mdp/rewards.py``.
-    ``action_rate`` is the CAPS-style action-rate penalty upstream folds into
-    the dense reward (``action_smooth_coef = 0.67`` at 30 Hz control).
+    upstream stages override (not add to) each other. It also folds in the
+    contact penalties (-6 robot↔table, -3 robot↔bowl) and the not-lifted
+    penalty (-1), exactly as ``compute_dense_reward`` applies them after the
+    staged overrides; see ``mdp/rewards.py``.
+
+    ``action_rate`` / ``joint_vel`` are small CAPS-style regularizers — they
+    are NOT part of upstream's dense reward, kept as separate additive terms.
     """
 
     place = RewTerm(
@@ -391,17 +418,6 @@ class RewardsCfg:
             "robot_cfg": SceneEntityCfg("robot"),
         },
         weight=1.0,
-    )
-
-    # Robot-touches-bowl penalty — restores upstream's `- 3 * robot_touching_bin`
-    # (a flat per-step cost whenever a gripper body contacts the bowl).
-    touch_bowl = RewTerm(
-        func=mdp.robot_touches_bowl,
-        params={
-            "sensor_names": ("gripper_contact", "jaw_contact"),
-            "force_threshold": 1.0,
-        },
-        weight=-3.0,
     )
 
     action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1e-4)
@@ -425,9 +441,17 @@ class TerminationsCfg:
         params={"minimum_height": -0.01, "asset_cfg": SceneEntityCfg("block")},
     )
 
+    # Squint Place success — same predicate the staged reward uses for its
+    # flat-9 success stage: cube over the bowl, robot static, and the robot
+    # touching neither the cube nor the bowl.
     success = DoneTerm(
-        func=mdp.success_block_in_bowl,
-        params={"xy_threshold": 0.04, "z_max_above_bowl": 0.015},
+        func=mdp.place_success,
+        params={
+            "bowl_radius": BOWL_RADIUS,
+            "cube_cfg": SceneEntityCfg("block"),
+            "bowl_cfg": SceneEntityCfg("bowl_floor"),
+            "robot_cfg": SceneEntityCfg("robot"),
+        },
     )
 
     # block_stalled = DoneTerm(

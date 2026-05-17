@@ -85,6 +85,8 @@ class SoArm101PickPlaceEnvCfg(PickPlaceEnvCfg):
             init_state=RigidObjectCfg.InitialStateCfg(pos=[0.17, 0.0, 0.01], rot=[1, 0, 0, 0]),
             spawn=sim_utils.CuboidCfg(
                 size=(0.02, 0.02, 0.02),
+                # contact reporting on so the gripper-vs-cube ContactSensors work
+                activate_contact_sensors=True,
                 rigid_props=sim_utils.RigidBodyPropertiesCfg(
                     solver_position_iteration_count=16,
                     solver_velocity_iteration_count=1,

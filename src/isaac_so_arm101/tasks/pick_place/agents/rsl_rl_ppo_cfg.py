@@ -20,7 +20,7 @@ from isaaclab_rl.rsl_rl import (
 class PickPlacePPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 64
     max_iterations = 3000
-    save_interval = 50
+    save_interval = 25
     experiment_name = "pick_place_frozen_net"
     empirical_normalization = False
     logger = "wandb"
