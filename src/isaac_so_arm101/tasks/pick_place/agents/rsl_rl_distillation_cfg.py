@@ -57,8 +57,14 @@ class PickPlaceDistillationRunnerCfg(RslRlDistillationRunnerCfg):
     # actor_hidden_dims / activation, or loading the teacher weights will fail.
     policy = RslRlDistillationStudentTeacherCfg(
         init_noise_std=1.0,
-        noise_std_type="scalar",
+        # log-parameterized std: exp() keeps it strictly positive so a bad
+        # update can't drive it negative and crash Normal.sample() (see the
+        # teacher PPO cfg — the default "scalar" std is an unclamped raw param).
+        noise_std_type="log",
         student_obs_normalization=False,
+        # False: the teacher PPO run uses empirical_normalization=False, so its
+        # checkpoint carries no obs normalizer — the frozen teacher must read
+        # raw obs here, matching how it was trained.
         teacher_obs_normalization=False,
         student_hidden_dims=[256, 128, 64],
         teacher_hidden_dims=[256, 128, 64],

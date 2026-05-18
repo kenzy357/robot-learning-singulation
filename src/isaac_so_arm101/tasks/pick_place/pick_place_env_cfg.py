@@ -416,7 +416,7 @@ class RewardsCfg:
     pen_cube_displaced = RewTerm(
         func=mdp.cube_displaced_on_table,
         weight=-1.0,
-        params={"cube_half_size": CUBE_HALF, "max_radius": 0.04},
+        params={"cube_half_size": CUBE_HALF, "max_radius": 0.07},
     )
 
     # Big one-shot penalty fired on the step the ``block_dropped`` termination
@@ -427,6 +427,26 @@ class RewardsCfg:
         weight=-7.0,
         params={"term_keys": "block_dropped"},
     )
+
+    # --- potential-based shaping (un-farmable: pays change, not level) -----
+    # Bridges the discrete reach->grasp cliff and rewards lifting, without
+    # creating a hover local optimum — a held state yields 0 reward.
+    grasp_bridge = RewTerm(
+        func=mdp.grasp_progress_reward,
+        weight=2.0,
+        params={"proximity_scale": 10.0},
+    )
+    lift_progress = RewTerm(
+        func=mdp.lift_progress_reward,
+        weight=20.0,
+        params={"max_lift_height": 0.15},
+    )
+
+    # --- TEMPORARY DEBUG — prints extreme/non-finite values every step ------
+    # Weight must be non-zero or RewardManager.compute() skips the func
+    # entirely (zero-weight micro-optimization). The func returns all-zeros, so
+    # any weight contributes exactly 0 to the reward — 1.0 is fine.
+    debug_extremes = RewTerm(func=mdp.debug_extreme_values, weight=1.0)
 
     # --- regularizers (not part of upstream's dense reward) ----------------
     action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1e-4)

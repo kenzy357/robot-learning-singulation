@@ -22,6 +22,11 @@ class PickPlacePPORunnerCfg(RslRlOnPolicyRunnerCfg):
     max_iterations = 3000
     save_interval = 25
     experiment_name = "pick_place_frozen_net"
+    # Kept False: the privileged obs group has near-constant dims (binary
+    # contact_states flags, the static-cube quaternion). Empirical
+    # normalization divides by per-dim std, so a zero-variance dim that
+    # occasionally flips (e.g. is_grasped) produces a huge normalized spike
+    # that blows up the policy output and the value loss.
     empirical_normalization = False
     logger = "wandb"
     wandb_project = "isaac_so_arm101_pick_place"
@@ -30,6 +35,10 @@ class PickPlacePPORunnerCfg(RslRlOnPolicyRunnerCfg):
     obs_groups = {"policy": ["policy"], "critic": ["policy"]}
     policy = RslRlPpoActorCriticCfg(
         init_noise_std=1.0,
+        # log-parameterized action-noise std: exp() keeps it strictly positive,
+        # so a policy-gradient update can never drive it negative and crash
+        # `Normal.sample()` (the default "scalar" std is an unclamped raw param).
+        noise_std_type="log",
         actor_hidden_dims=[256, 128, 64],
         critic_hidden_dims=[256, 128, 64],
         activation="elu",
@@ -42,7 +51,12 @@ class PickPlacePPORunnerCfg(RslRlOnPolicyRunnerCfg):
         num_learning_epochs=5,
         num_mini_batches=4,
         learning_rate=1.0e-4,
-        schedule="adaptive",
+        # "fixed", NOT "adaptive": the adaptive schedule multiplies the LR x1.5
+        # per minibatch whenever KL is small and ramps it to rsl_rl's hard-coded
+        # 1e-2 ceiling (100x nominal) within the first iteration. At 1e-2 the
+        # value function inflates without bound (bootstrap feedback loop) and
+        # eventually explodes the critic. "fixed" keeps the LR at 1e-4.
+        schedule="fixed",
         gamma=0.98,
         lam=0.95,
         desired_kl=0.01,
