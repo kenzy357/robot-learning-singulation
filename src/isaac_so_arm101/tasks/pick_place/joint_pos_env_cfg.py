@@ -97,6 +97,17 @@ class SoArm101PickPlaceEnvCfg(PickPlaceEnvCfg):
                 ),
                 mass_props=sim_utils.MassPropertiesCfg(mass=0.05),
                 collision_props=sim_utils.CollisionPropertiesCfg(),
+                # High friction so the small SO-101 gripper can actually hold
+                # the cube. A bare CuboidCfg otherwise falls back to the default
+                # physics material (~0.5 friction) — too slippery for a weak
+                # parallel gripper to lift by friction grip. The DexCube USD
+                # used by the reference lift task ships its own tuned material;
+                # a primitive cuboid has none unless set here.
+                physics_material=sim_utils.RigidBodyMaterialCfg(
+                    static_friction=1.0,
+                    dynamic_friction=1.0,
+                    restitution=0.0,
+                ),
                 visual_material=sim_utils.PreviewSurfaceCfg(
                     diffuse_color=(1.0, 0.0, 0.0), metallic=0.0
                 ),
@@ -136,6 +147,8 @@ class SoArm101PickPlaceEnvCfg(PickPlaceEnvCfg):
                     offset=OffsetCfg(
                         #pos=[0.01, 0.0, -0.09],
                         pos=[0.01, 0.0, -0.08],
+                        #pos=[0.0, -0.09, 0.01], # og one with the bigger cube
+                        #pos=[0.01, 0.0, -0.09],
                     ),
                 ),
             ],

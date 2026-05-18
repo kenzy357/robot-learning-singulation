@@ -375,11 +375,25 @@ CYLINDER_RADIUS = 0.04
 CUBE_HALF = 0.01
 
 # Geometry params shared by the four staged Place reward terms — kept in sync
-# with the scene constants above.
+# with the scene constants above. (Deactivated along with the staged reward.)
 _PLACE_PARAMS = {
     "cube_half_size": CUBE_HALF,
     "bowl_radius": BOWL_RADIUS,
     "rim_height": BOWL_RIM_HEIGHT,
+}
+
+# above_bin fires within `approach_radius` of the bowl centre. In the ring
+# between `bowl_radius` and `approach_radius` the cube must be lifted above
+# `min_lift_height` (a cube shoved across the table cannot trigger it); once
+# xy is inside `bowl_radius` the lift gate is dropped so the cube can be
+# lowered/released into the bowl. success_bonus and the success termination
+# still use the full BOWL_RADIUS.
+_ABOVE_BIN_PARAMS = {
+    "cube_half_size": CUBE_HALF,
+    "bowl_radius": BOWL_RADIUS - 0.02,   # placement zone: 0.05 m
+    "rim_height": BOWL_RIM_HEIGHT,
+    "min_lift_height": 0.04,             # ring lift gate: cube >= 4 cm off table
+    "approach_radius": 1,             # above_bin footprint: 0.15 m
 }
 
 
@@ -398,64 +412,72 @@ class RewardsCfg:
     are NOT part of upstream's dense reward, kept as separate additive terms.
     """
 
-    # --- staged dense reward (mutually exclusive; sum == upstream reward) ---
-    reach = RewTerm(func=mdp.place_stage_reach, weight=1.0, params=_PLACE_PARAMS)
-    grasp = RewTerm(func=mdp.place_stage_grasp, weight=1.0, params=_PLACE_PARAMS)
-    above_bin = RewTerm(func=mdp.place_stage_above_bin, weight=1.0, params=_PLACE_PARAMS)
-    success_bonus = RewTerm(func=mdp.place_stage_success, weight=1.0, params=_PLACE_PARAMS)
-
-    # --- penalties (applied after the staged overrides, as upstream) -------
-    #pen_touch_table = RewTerm(func=mdp.robot_touching_table, weight=-6.0)
-    pen_touch_bin = RewTerm(func=mdp.robot_touching_bin, weight=-3.0)
-    pen_not_lifted = RewTerm(
-        func=mdp.not_lifted, weight=-1.0, params={"cube_half_size": CUBE_HALF}
+    # --- lift portion: exact reward terms from the reference `lift` task ---
+    # object_ee_distance (reach, tanh) + object_is_lifted (binary lift) —
+    # ported verbatim from tasks/lift/mdp/rewards.py with the lift task's
+    # own weights (1.0 / 15.0).
+    reaching_object = RewTerm(
+        func=mdp.object_ee_distance, weight=1.0, params={"std": 0.05}
     )
+    lifting_object = RewTerm(
+        func=mdp.object_is_lifted, weight=25.0, params={"minimal_height": 0.025,"maximal_height": 1}
+    )
+
+    # --- place portion: staged Place reward — guide the cube to a position
+    # over the bowl, then release it. Only the above-bowl and success stages
+    # are used (the lift terms above replace the reach/grasp stages).
+    # above_bin = RewTerm(func=mdp.place_stage_above_bin, weight=30.0, params=_ABOVE_BIN_PARAMS)
+    # success_bonus = RewTerm(func=mdp.place_stage_success, weight=80.0, params=_PLACE_PARAMS)
+
+    # --- penalties --------------------------------------------------------
+    # #pen_touch_table = RewTerm(func=mdp.robot_touching_table, weight=-6.0)
+    #pen_touch_bin = RewTerm(func=mdp.robot_touching_bin, weight=-7.0)
 
     # Dense per-step penalty: cube still on the table but shoved >4 cm from its
     # spawn position — discourages dragging the cube instead of lifting it.
-    pen_cube_displaced = RewTerm(
-        func=mdp.cube_displaced_on_table,
-        weight=-1.0,
-        params={"cube_half_size": CUBE_HALF, "max_radius": 0.07},
-    )
+    # pen_cube_displaced = RewTerm(
+    #     func=mdp.cube_displaced_on_table,
+    #     weight=-1.0,
+    #     params={"cube_half_size": CUBE_HALF, "max_radius": 0.07},
+    # )
 
     # Big one-shot penalty fired on the step the ``block_dropped`` termination
     # triggers (block falls below ``minimum_height``). ``is_terminated_term``
     # excludes time-outs, so this only hits genuine drops, not episode timeout.
-    pen_block_dropped = RewTerm(
-        func=mdp.is_terminated_term,
-        weight=-7.0,
-        params={"term_keys": "block_dropped"},
-    )
+    # pen_block_dropped = RewTerm(
+    #     func=mdp.is_terminated_term,
+    #     weight=-7.0,
+    #     params={"term_keys": "block_dropped"},
+    # )
 
     # --- potential-based shaping (un-farmable: pays change, not level) -----
     # Bridges the discrete reach->grasp cliff and rewards lifting, without
     # creating a hover local optimum — a held state yields 0 reward.
-    grasp_bridge = RewTerm(
-        func=mdp.grasp_progress_reward,
-        weight=2.0,
-        params={"proximity_scale": 10.0},
-    )
-    lift_progress = RewTerm(
-        func=mdp.lift_progress_reward,
-        weight=20.0,
-        params={"max_lift_height": 0.15},
-    )
+    # grasp_bridge = RewTerm(
+    #     func=mdp.grasp_progress_reward,
+    #     weight=2.0,
+    #     params={"proximity_scale": 10.0},
+    # )
+    # lift_progress = RewTerm(
+    #     func=mdp.lift_progress_reward,
+    #     weight=20.0,
+    #     params={"max_lift_height": 0.15},
+    # )
 
     # --- TEMPORARY DEBUG — prints extreme/non-finite values every step ------
     # Weight must be non-zero or RewardManager.compute() skips the func
     # entirely (zero-weight micro-optimization). The func returns all-zeros, so
     # any weight contributes exactly 0 to the reward — 1.0 is fine.
-    debug_extremes = RewTerm(func=mdp.debug_extreme_values, weight=1.0)
+    # debug_extremes = RewTerm(func=mdp.debug_extreme_values, weight=1.0)
 
     # --- regularizers (not part of upstream's dense reward) ----------------
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1e-4)
+    # action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1e-4)
 
-    joint_vel = RewTerm(
-        func=mdp.joint_vel_l2,
-        weight=-1e-4,
-        params={"asset_cfg": SceneEntityCfg("robot")},
-    )
+    # joint_vel = RewTerm(
+    #     func=mdp.joint_vel_l2,
+    #     weight=-1e-4,
+    #     params={"asset_cfg": SceneEntityCfg("robot")},
+    # )
 
 
 
