@@ -82,7 +82,7 @@ class SoArm101PickPlaceEnvCfg(PickPlaceEnvCfg):
         # Set Cube as object
         self.scene.block = RigidObjectCfg(
             prim_path="{ENV_REGEX_NS}/Block",
-            init_state=RigidObjectCfg.InitialStateCfg(pos=[0.17, 0.0, 0.01], rot=[1, 0, 0, 0]),
+            init_state=RigidObjectCfg.InitialStateCfg(pos=[0.24, -0.09, 0.01], rot=[1, 0, 0, 0]),
             spawn=sim_utils.CuboidCfg(
                 size=(0.02, 0.02, 0.02),
                 # contact reporting on so the gripper-vs-cube ContactSensors work
@@ -175,16 +175,20 @@ class SoArm101PickPlaceTeacherEnvCfg(SoArm101PickPlaceEnvCfg):
     per-step ViT forward pass is pure waste here. The teacher PPO agent cfg
     routes ``obs_groups`` to the ``privileged`` group.
 
-    The wrist camera sensor itself is left in the scene (so this still needs
-    ``--enable_cameras``); only the expensive feature-extraction obs term is
-    removed. Removing the camera sensor too would speed teacher training
-    further but is left out to keep the scene identical to the student env.
+    The wrist camera sensor is also removed: with ``image_features`` dropped
+    nothing reads it, and the per-step ``TiledCamera`` render is the dominant
+    cost of teacher training. Removing it lets the teacher run as a pure-state
+    sim — no ``--enable_cameras`` needed — which scales to far more envs. The
+    student env keeps the camera; only this teacher variant drops it.
     """
 
     def __post_init__(self):
         super().__post_init__()
         # drop the DINOv2 image-feature term — teacher uses privileged state
         self.observations.policy.image_features = None
+        # drop the wrist camera entirely — nothing reads it once image_features
+        # is None, and skipping its per-step render is the real speed-up
+        self.scene.wrist_camera = None
 
 
 #################### useless ################################################################################

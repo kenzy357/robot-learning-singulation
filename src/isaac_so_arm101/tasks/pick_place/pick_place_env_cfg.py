@@ -80,7 +80,7 @@ CAMERA_POS = (-0.066, 0.021, 0.012)
    ``BOWL_RIM_HEIGHT`` the wall height — both feed the staged Place reward and
    the success termination so the visual matches the success criterion.'''
 BOWL_USD_PATH = str(Path(__file__).resolve().parent / "assets" / "bowl.usd")
-BOWL_POS = (0.29, 0.0, 0.0)
+BOWL_POS = (0.27, 0.09, 0.0)
 BOWL_RADIUS = 0.07          # success footprint (mesh AABB half-extent ~0.075)
 BOWL_RIM_HEIGHT = 0.053     # mesh wall height (AABB z-extent)
 
@@ -362,6 +362,12 @@ class EventCfg:
     #     },
     # )
 
+    # Snapshot the block's spawn position each reset into env.block_spawn_pos_w
+    # so reward/termination terms can measure displacement from it. Keep this
+    # LAST among reset events so it captures whatever reset/randomization ran
+    # above (default reset now, randomization if re-enabled).
+    record_block_spawn = EventTerm(func=mdp.record_block_spawn_pose, mode="reset")
+
 
 CYLINDER_RADIUS = 0.04
 # Cube half-extent (m). The block is spawned as a 0.02 m cube (see
@@ -399,10 +405,27 @@ class RewardsCfg:
     success_bonus = RewTerm(func=mdp.place_stage_success, weight=1.0, params=_PLACE_PARAMS)
 
     # --- penalties (applied after the staged overrides, as upstream) -------
-    pen_touch_table = RewTerm(func=mdp.robot_touching_table, weight=-6.0)
+    #pen_touch_table = RewTerm(func=mdp.robot_touching_table, weight=-6.0)
     pen_touch_bin = RewTerm(func=mdp.robot_touching_bin, weight=-3.0)
     pen_not_lifted = RewTerm(
         func=mdp.not_lifted, weight=-1.0, params={"cube_half_size": CUBE_HALF}
+    )
+
+    # Dense per-step penalty: cube still on the table but shoved >4 cm from its
+    # spawn position — discourages dragging the cube instead of lifting it.
+    pen_cube_displaced = RewTerm(
+        func=mdp.cube_displaced_on_table,
+        weight=-1.0,
+        params={"cube_half_size": CUBE_HALF, "max_radius": 0.04},
+    )
+
+    # Big one-shot penalty fired on the step the ``block_dropped`` termination
+    # triggers (block falls below ``minimum_height``). ``is_terminated_term``
+    # excludes time-outs, so this only hits genuine drops, not episode timeout.
+    pen_block_dropped = RewTerm(
+        func=mdp.is_terminated_term,
+        weight=-7.0,
+        params={"term_keys": "block_dropped"},
     )
 
     # --- regularizers (not part of upstream's dense reward) ----------------

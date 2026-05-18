@@ -160,6 +160,36 @@ def not_lifted(
     return (~item_lifted).float()
 
 
+def cube_displaced_on_table(
+    env: "ManagerBasedRLEnv",
+    cube_half_size: float = 0.01,
+    max_radius: float = 0.04,
+    cube_cfg: SceneEntityCfg = SceneEntityCfg("block"),
+) -> torch.Tensor:
+    """``1.0`` while the cube sits on the table yet has been shoved more than
+    ``max_radius`` (metres) horizontally from its spawn position.
+
+    Penalizes sliding/dragging the cube across the table instead of lifting it
+    straight up. ``on_table`` reuses the ``not_lifted`` predicate
+    (``z < cube_half_size + 1e-3``); once the cube is lifted this is ``0.0`` —
+    only table-bound displacement is penalized.
+
+    The spawn position comes from ``env.block_spawn_pos_w``, snapshotted each
+    reset by the ``record_block_spawn`` event — so it stays correct even if the
+    block reset is domain-randomized. Falls back to ``default_root_state`` if
+    that event is not registered (correct only without randomization).
+    """
+    cube: RigidObject = env.scene[cube_cfg.name]
+    on_table = cube.data.root_pos_w[:, 2] < (cube_half_size + 1e-3)
+    spawn_pos = getattr(env, "block_spawn_pos_w", None)
+    if spawn_pos is None:
+        spawn_pos = cube.data.default_root_state[:, :3] + env.scene.env_origins
+    disp = torch.linalg.vector_norm(
+        cube.data.root_pos_w[:, :2] - spawn_pos[:, :2], dim=-1
+    )
+    return (on_table & (disp > max_radius)).float()
+
+
 # ---------------------------------------------------------------------------
 # Success predicate — shared by the success termination and the reward
 # ---------------------------------------------------------------------------

@@ -117,3 +117,29 @@ def reset_block_and_bowl_uniform(
         state[:, :3] += env.scene.env_origins[env_ids]
         asset.write_root_pose_to_sim(state[:, :7], env_ids=env_ids)
         asset.write_root_velocity_to_sim(state[:, 7:], env_ids=env_ids)
+
+
+def record_block_spawn_pose(
+    env: "ManagerBasedEnv",
+    env_ids: torch.Tensor,
+    asset_name: str = "block",
+) -> None:
+    """Snapshot the block's world position at episode reset into
+    ``env.block_spawn_pos_w`` (an ``(num_envs, 3)`` tensor, created on first
+    call).
+
+    Register as a ``mode="reset"`` event *after* any block-randomization event:
+    it reads ``root_pos_w``, so it captures the actual per-env spawn — unlike
+    ``default_root_state``, which is the static configured pose and ignores
+    randomization. Rewards/terminations that need the spawn read
+    ``env.block_spawn_pos_w``.
+    """
+    if env_ids is None:
+        env_ids = torch.arange(env.scene.num_envs, device=env.device)
+
+    block: RigidObject = env.scene[asset_name]
+    if not hasattr(env, "block_spawn_pos_w"):
+        env.block_spawn_pos_w = torch.zeros(
+            env.scene.num_envs, 3, device=env.device
+        )
+    env.block_spawn_pos_w[env_ids] = block.data.root_pos_w[env_ids].clone()
