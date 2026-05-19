@@ -191,6 +191,143 @@ def cube_displaced_on_table(
 
 
 # ---------------------------------------------------------------------------
+# Potential-based shaping — dense guidance that cannot be farmed by hovering.
+# Each term rewards the *change* in a potential Phi, so a held state pays 0 and
+# any state-space cycle telescopes to 0. See lift/grasp terms below.
+# ---------------------------------------------------------------------------
+def _potential_shaping(
+    env: "ManagerBasedRLEnv", key: str, phi_now: torch.Tensor
+) -> torch.Tensor:
+    """Generic PBRS step reward ``Phi_t - Phi_{t-1}``.
+
+    The previous potential is cached per-env on the env as ``_pbrs_{key}``. The
+    reward is forced to ``0`` on the first step of each episode
+    (``episode_length_buf <= 1``) and the cache is overwritten every step, so a
+    reset never leaks a spurious jump — no reset event needed.
+
+    Because only the *delta* is paid, a term built on this is un-farmable:
+    holding a state gives 0, and any closed loop in Phi sums to 0.
+    """
+    attr = f"_pbrs_{key}"
+    phi_prev = getattr(env, attr, phi_now)
+    shaped = phi_now - phi_prev
+    shaped = torch.where(
+        env.episode_length_buf <= 1, torch.zeros_like(shaped), shaped
+    )
+    setattr(env, attr, phi_now.detach())
+    return shaped
+
+
+def lift_progress_reward(
+    env: "ManagerBasedRLEnv",
+    max_lift_height: float = 0.15,
+    cube_cfg: SceneEntityCfg = SceneEntityCfg("block"),
+) -> torch.Tensor:
+    """PBRS lift reward — pays the *increase* in cube height, never the height.
+
+    ``Phi = clamp(cube_z - spawn_z, 0, max_lift_height)``; reward is
+    ``Phi_t - Phi_{t-1}``. Raising the cube pays, lowering it costs the same,
+    and holding it at any height pays nothing — so the robot cannot hover with
+    the cube lifted to farm reward. Net episode reward telescopes to the final
+    height gained.
+
+    Deliberately not gated by a grasp flag: a non-grasped cube cannot stay up,
+    so sustained positive reward here already implies a real grasp.
+    """
+    cube: RigidObject = env.scene[cube_cfg.name]
+    spawn_pos = getattr(env, "block_spawn_pos_w", None)
+    if spawn_pos is not None:
+        spawn_z = spawn_pos[:, 2]
+    else:
+        spawn_z = cube.data.default_root_state[:, 2] + env.scene.env_origins[:, 2]
+    phi = (cube.data.root_pos_w[:, 2] - spawn_z).clamp(0.0, max_lift_height)
+    return _potential_shaping(env, "lift", phi)
+
+
+def grasp_progress_reward(
+    env: "ManagerBasedRLEnv",
+    proximity_scale: float = 10.0,
+    gripper_joint_name: str = "gripper",
+    cube_cfg: SceneEntityCfg = SceneEntityCfg("block"),
+    ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """PBRS grasp-bridge reward — gives the missing gradient across the
+    discrete reach->grasp cliff without creating a hover optimum.
+
+    ``Phi = closedness * proximity`` with ``closedness = 1 - gripper_openness``
+    and ``proximity = 1 - tanh(scale * d_ee_cube)``. Reward is
+    ``Phi_t - Phi_{t-1}``: it pays as the gripper closes on the cube and is
+    ``0`` while that state is merely held. Releasing pays it back (negative
+    delta), so over a full pick-and-place the grasp shaping nets to ~0 — it
+    only *guides*, exactly as PBRS intends.
+    """
+    robot: Articulation = env.scene[robot_cfg.name]
+    cube: RigidObject = env.scene[cube_cfg.name]
+    ee_frame: FrameTransformer = env.scene[ee_frame_cfg.name]
+
+    ee_pos = ee_frame.data.target_pos_w[:, 0, :]
+    d_ee_cube = torch.norm(ee_pos - cube.data.root_pos_w, dim=-1)
+    proximity = 1.0 - torch.tanh(proximity_scale * d_ee_cube)
+
+    g_idx = robot.data.joint_names.index(gripper_joint_name)
+    g_pos = robot.data.joint_pos[:, g_idx]
+    g_lo = robot.data.soft_joint_pos_limits[:, g_idx, 0]
+    g_hi = robot.data.soft_joint_pos_limits[:, g_idx, 1]
+    openness = ((g_pos - g_lo) / (g_hi - g_lo + 1e-8)).clamp(0.0, 1.0)
+
+    phi = (1.0 - openness) * proximity
+    return _potential_shaping(env, "grasp", phi)
+
+
+# ---------------------------------------------------------------------------
+# TEMPORARY DEBUG — locate the source of the value-loss explosion. Remove once
+# the offending quantity is identified.
+# ---------------------------------------------------------------------------
+def debug_extreme_values(
+    env: "ManagerBasedRLEnv",
+    cube_cfg: SceneEntityCfg = SceneEntityCfg("block"),
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Zero-effect diagnostic: tracks a running max per candidate quantity and
+    prints only when a *new record* is set (>1.2x the previous record, above a
+    small floor). Gives a clean escalation trace up to the crash instead of
+    flooding. Cube position is taken env-local (origin subtracted) so the
+    per-env world offset is not mistaken for an extreme value. Register with a
+    non-zero weight; the func returns all-zeros so it adds nothing to reward.
+    """
+    cube: RigidObject = env.scene[cube_cfg.name]
+    robot: Articulation = env.scene[robot_cfg.name]
+
+    checks = {
+        "cube_local_pos": cube.data.root_pos_w - env.scene.env_origins,
+        "cube_lin_vel": cube.data.root_lin_vel_w,
+        "cube_ang_vel": cube.data.root_ang_vel_w,
+        "joint_vel": robot.data.joint_vel,
+        "raw_action": env.action_manager.action,
+    }
+    step = getattr(env, "common_step_counter", -1)
+    records = getattr(env, "_dbg_records", None)
+    if records is None:
+        records = {}
+        env._dbg_records = records
+    for name, t in checks.items():
+        if not bool(torch.isfinite(t).all()):
+            print(f"[DEBUG step={step}] NON-FINITE {name}")
+            continue
+        per_env = t.abs().amax(dim=-1)
+        amax = float(per_env.max())
+        if amax > 1.2 * records.get(name, 1.0) and amax > 5.0:
+            records[name] = amax
+            env_i = int(per_env.argmax())
+            print(
+                f"[DEBUG step={step}] NEW MAX {name}: {amax:.3e} "
+                f"env={env_i} row={[round(v, 3) for v in t[env_i].tolist()]}"
+            )
+    return torch.zeros(env.num_envs, device=env.device)
+
+
+# ---------------------------------------------------------------------------
 # Success predicate — shared by the success termination and the reward
 # ---------------------------------------------------------------------------
 def place_success(
@@ -245,6 +382,8 @@ def _place_components(
     cube_half_size: float = 0.01,
     bowl_radius: float = 0.05,
     rim_height: float = 0.025,
+    min_lift_height: float = 0.0,
+    approach_radius: float | None = None,
     force_threshold: float = 1.0,
     robot_static_threshold: float = 2e-2,
     gripper_joint_name: str = "gripper",
@@ -308,6 +447,13 @@ def _place_components(
     is_grasped = item_grasped(env, item_sensor_names, force_threshold).bool()
     is_item_above_bin = item_to_goal_dist_xy <= bowl_radius
     item_lifted = item_pos[:, 2] >= (cube_half_size + 1e-3)
+    # above-bowl stage fires within `approach_radius`; in the ring outside
+    # `bowl_radius` the cube must be lifted above `min_lift_height` so a cube
+    # shoved across the table cannot trigger it. `approach_radius=None` falls
+    # back to `bowl_radius`, recovering the original xy-only behaviour.
+    _approach_r = bowl_radius if approach_radius is None else approach_radius
+    is_item_in_approach = item_to_goal_dist_xy <= _approach_r
+    item_above_min_lift = item_pos[:, 2] >= min_lift_height
 
     touching_item = robot_touching_item(env, item_sensor_names, force_threshold)
     touching_bin = robot_touching_bin(env, bowl_sensor_names, force_threshold)
@@ -340,7 +486,15 @@ def _place_components(
     # mutually exclusive region masks (matches the torch.where ladder:
     # base -> grasped -> above_bin -> success, later stages override earlier)
     region_success = success
-    region_above = is_item_above_bin & (~success)
+    # fires inside `approach_radius`; the lift gate applies only in the ring
+    # outside `bowl_radius` (`is_item_above_bin` short-circuits it once the
+    # cube is over the bowl, so it can be lowered/released freely). This
+    # widened region may overlap region_grasp/region_base — `place_dense_
+    # reward` is therefore no longer a strict partition (the cfg uses the
+    # split per-stage terms, which are unaffected).
+    region_above = (
+        is_item_in_approach & (~success) & (is_item_above_bin | item_above_min_lift)
+    )
     region_grasp = is_grasped & (~is_item_above_bin) & (~success)
     region_base = (~is_grasped) & (~is_item_above_bin) & (~success)
 
@@ -385,10 +539,23 @@ def place_stage_above_bin(
     cube_half_size: float = 0.01,
     bowl_radius: float = 0.05,
     rim_height: float = 0.025,
+    min_lift_height: float = 0.0,
+    approach_radius: float | None = None,
 ) -> torch.Tensor:
-    """Above-bowl stage: ``4 + place_reward + (~touch_item) + openness + static``."""
+    """Above-bowl stage: ``4 + place_reward + (~touch_item) + openness + static``.
+
+    Fires within ``approach_radius`` of the bowl centre. In the ring outside
+    ``bowl_radius`` the cube must be lifted above ``min_lift_height`` (so a cube
+    shoved across the table cannot trigger it); once xy is inside ``bowl_radius``
+    the lift requirement is dropped so the cube can be lowered into the bowl.
+    """
     return _place_components(
-        env, cube_half_size=cube_half_size, bowl_radius=bowl_radius, rim_height=rim_height
+        env,
+        cube_half_size=cube_half_size,
+        bowl_radius=bowl_radius,
+        rim_height=rim_height,
+        min_lift_height=min_lift_height,
+        approach_radius=approach_radius,
     )["stage_above"]
 
 
@@ -428,3 +595,75 @@ def place_normalized_dense_reward(
 ) -> torch.Tensor:
     """``place_dense_reward / 9`` — matches ``compute_normalized_dense_reward``."""
     return place_dense_reward(env, **kwargs) / 9.0
+
+
+# ---------------------------------------------------------------------------
+# Minimal dense reward — cube to a point above its own spawn position
+# ---------------------------------------------------------------------------
+def cube_to_spawn_offset_tanh(
+    env: "ManagerBasedRLEnv",
+    std: float = 0.1,
+    height_offset: float = 0.04,
+    cube_cfg: SceneEntityCfg = SceneEntityCfg("block"),
+) -> torch.Tensor:
+    """``1 - tanh(d / std)`` — dense signal that rewards moving the CUBE toward
+    a fixed point ``height_offset`` metres above its spawn (initial) position.
+
+    The target is ``cube_spawn_xyz + (0, 0, height_offset)`` and ``d`` is the
+    distance from the cube's *current* position to that target; reward lies in
+    ``[0, 1]`` and peaks when the cube is lifted straight up by
+    ``height_offset``. The spawn position comes from ``env.block_spawn_pos_w``
+    (snapshotted each reset by the ``record_block_spawn`` event), so the target
+    stays fixed for the whole episode. Falls back to the cube's default spawn
+    state if that event is not registered.
+    """
+    cube: RigidObject = env.scene[cube_cfg.name]
+
+    spawn_pos = getattr(env, "block_spawn_pos_w", None)
+    if spawn_pos is None:
+        spawn_pos = cube.data.default_root_state[:, :3] + env.scene.env_origins
+    target = spawn_pos.clone()
+    target[:, 2] = target[:, 2] + height_offset
+
+    distance = torch.norm(cube.data.root_pos_w - target, dim=-1)
+    return 1.0 - torch.tanh(distance / std)
+
+
+# ---------------------------------------------------------------------------
+# Lift-task reward terms — exact port of ``tasks/lift/mdp/rewards.py``
+# (``object_ee_distance`` / ``object_is_lifted``). The function bodies are
+# unchanged from the upstream lift task; only the default ``SceneEntityCfg``
+# is renamed ``object`` -> ``block`` to match this scene's target-object name.
+# These handle the *lift* portion of the reward; the ``place_stage_*`` terms
+# above handle guiding the cube over the bowl and releasing it.
+# ---------------------------------------------------------------------------
+def object_is_lifted(
+    env: "ManagerBasedRLEnv",
+    minimal_height: float,
+    maximal_height: float,
+    object_cfg: SceneEntityCfg = SceneEntityCfg("block"),
+) -> torch.Tensor:
+    """Reward the agent for lifting the object above the minimal height."""
+    object: RigidObject = env.scene[object_cfg.name]
+    #return torch.where(object.data.root_pos_w[:, 2] > minimal_height, 1.0, 0.0)
+    return torch.where((object.data.root_pos_w[:, 2] > minimal_height) &  (object.data.root_pos_w[:, 2] < maximal_height), 1.0, 0.0)
+
+
+def object_ee_distance(
+    env: "ManagerBasedRLEnv",
+    std: float,
+    object_cfg: SceneEntityCfg = SceneEntityCfg("block"),
+    ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
+) -> torch.Tensor:
+    """Reward the agent for reaching the object using tanh-kernel."""
+    # extract the used quantities (to enable type-hinting)
+    object: RigidObject = env.scene[object_cfg.name]
+    ee_frame: FrameTransformer = env.scene[ee_frame_cfg.name]
+    # Target object position: (num_envs, 3)
+    cube_pos_w = object.data.root_pos_w
+    # End-effector position: (num_envs, 3)
+    ee_w = ee_frame.data.target_pos_w[..., 0, :]
+    # Distance of the end-effector to the object: (num_envs,)
+    object_ee_distance = torch.norm(cube_pos_w - ee_w, dim=1)
+
+    return 1 - torch.tanh(object_ee_distance / std)
