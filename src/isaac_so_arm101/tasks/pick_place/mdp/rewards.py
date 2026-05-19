@@ -50,6 +50,7 @@ import torch
 from isaaclab.assets import Articulation, RigidObject
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.sensors import ContactSensor, FrameTransformer
+from isaaclab.utils.math import quat_apply
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -627,6 +628,36 @@ def cube_to_spawn_offset_tanh(
 
     distance = torch.norm(cube.data.root_pos_w - target, dim=-1)
     return 1.0 - torch.tanh(distance / std)
+
+
+# ---------------------------------------------------------------------------
+# Wrist-orientation penalty — discourage a skyward gripper
+# ---------------------------------------------------------------------------
+def ee_pointing_up_penalty(
+    env: "ManagerBasedRLEnv",
+    approach_axis: tuple[float, float, float] = (0.0, 0.0, -1.0),
+    ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
+) -> torch.Tensor:
+    """Penalty in ``[0, 1]`` when the gripper approach axis points ABOVE the
+    horizontal plane (toward the sky); exactly ``0`` at or below horizontal.
+
+    ``approach_axis`` is the gripper pointing direction in EE-local coords —
+    ``(0, 0, -1)`` is ``-Z`` of ``gripper_link``, the direction toward a
+    grasped cube (the ``ee_frame`` offset is -8 cm along that axis). Rotated
+    into world frame, its Z-component is the signed "skyward-ness": ``+1``
+    straight up, ``0`` horizontal, ``-1`` straight down.
+
+    The penalty is ``clamp(world_z, min=0)`` — flat ``0`` for any down/
+    horizontal pose, so there is NO gradient dragging the gripper toward the
+    ground; it only discourages a skyward wrist, ramping smoothly to ``1`` as
+    the gripper points straight up. Use with a negative weight.
+    """
+    ee_frame: FrameTransformer = env.scene[ee_frame_cfg.name]
+    ee_quat = ee_frame.data.target_quat_w[:, 0, :]  # (N, 4) wxyz
+    axis = torch.tensor(approach_axis, dtype=torch.float32, device=env.device)
+    axis = axis.expand(env.num_envs, 3)
+    world_dir = quat_apply(ee_quat, axis)  # (N, 3)
+    return world_dir[:, 2].clamp(min=0.0)
 
 
 # ---------------------------------------------------------------------------

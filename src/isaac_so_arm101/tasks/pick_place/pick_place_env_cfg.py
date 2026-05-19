@@ -37,6 +37,7 @@ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
 ## added for pick and place
 from isaaclab.sensors import ContactSensorCfg, TiledCameraCfg
+import math
 import torch
 
 
@@ -64,13 +65,42 @@ def euler_to_quat(roll_deg, pitch_deg, yaw_deg, device="cpu"):
         (cr * sp * cy - sr * cp * sy).item(),
         (cr * cp * sy + sr * sp * cy).item(),
     )
-# CAMERA_ROT = euler_to_quat(110.0, 0.0, 180.0)
-# CAMERA_POS = (0.0, 0.035, 0.082)
+# --- previous (hand-tuned) wrist-camera poses, kept for reference ---
+# CAMERA_ROT = euler_to_quat(110.0, 0.0, 180.0); CAMERA_POS = (0.0, 0.035, 0.082)
+# CAMERA_ROT = euler_to_quat(90.0, 14.0, 90.0);  CAMERA_POS = (-0.066, 0.021, 0.012)
 
-CAMERA_ROT = euler_to_quat(90.0, 14.0, 90.0)
-# CAMERA_POS = (-0.04, -0.02, 0.003)
-# CAMERA_POS = (-0.057, -0.006, 0.012)
-CAMERA_POS = (-0.066, 0.021, 0.012)
+
+def squint_euler_to_quat(roll_deg, pitch_deg, yaw_deg):
+    """Replicate squint's WristCameraEnv euler->quat exactly.
+
+    squint composes the wrist-camera rotation as
+    ``q = q_pitch(Y) . q_yaw(Z) . q_roll(X)`` (see ``_update_wrist_camera_pose``
+    in singulation-project/squint/envs/base_random_env.py) — NOT the
+    intrinsic-XYZ order used by ``euler_to_quat`` above, hence its own
+    converter. Returns ``(w, x, y, z)``.
+    """
+    r = math.radians(roll_deg) / 2.0
+    p = math.radians(pitch_deg) / 2.0
+    y = math.radians(yaw_deg) / 2.0
+    ci, si = math.cos(r), math.sin(r)
+    cj, sj = math.cos(p), math.sin(p)
+    ck, sk = math.cos(y), math.sin(y)
+    q_py_w, q_py_x, q_py_y, q_py_z = cj * ck, sj * sk, sj * ck, cj * sk
+    return (
+        q_py_w * ci - q_py_x * si,
+        q_py_w * si + q_py_x * ci,
+        q_py_y * ci + q_py_z * si,
+        q_py_z * ci - q_py_y * si,
+    )
+
+
+# Wrist-camera pose ported from the squint ``Place`` task — squint's
+# WristCameraEnv.WRIST_CAMERA_BASE_POS / _ROT_RAD (re-verified 2026-05-19),
+# expressed relative to ``gripper_link``. SAPIEN's camera convention
+# (+X forward, +Z up) maps to IsaacLab's ``convention="world"``, so CAMERA_ROT
+# is fed straight into the TiledCamera OffsetCfg below.
+CAMERA_POS = (0.0001, 0.0498, -0.0691)
+CAMERA_ROT = squint_euler_to_quat(-90.0, 91.0, -35.31)
 
 
 '''Bowl geometry — real-scan mesh asset (``assets/bowl.usd``, converted from
@@ -185,7 +215,7 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
 
     # thin red cylinder so the camera location is visible in the Isaac Sim viewport
     cam_marker: AssetBaseCfg = AssetBaseCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/wrist_link/cam_marker",
+        prim_path="{ENV_REGEX_NS}/Robot/gripper_link/cam_marker",
         init_state=AssetBaseCfg.InitialStateCfg(pos=CAMERA_POS,
                                                 rot=CAMERA_ROT),
         spawn=sim_utils.CylinderCfg(
@@ -197,7 +227,7 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
     # black tip — 1 cm cap at the front (+Z of the body = optical axis direction)
     # child of cam_marker so it inherits rotation automatically; pos is in body-local frame
     cam_marker_tip: AssetBaseCfg = AssetBaseCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/wrist_link/cam_marker/tip",
+        prim_path="{ENV_REGEX_NS}/Robot/gripper_link/cam_marker/tip",
         init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, 0.0175)),
         spawn=sim_utils.CylinderCfg(
             radius=0.008,
@@ -206,25 +236,29 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
         ),
     )
 
-    # wrist-mounted camera → feeds frozen ResNet18 encoder
+    # Wrist camera → frozen DINOv2 encoder (see ObservationsCfg.image_features).
+    # Pose ported from the squint ``Place`` task: mounted on ``gripper_link`` at
+    # the squint WRIST_CAMERA base pose. ``convention="world"`` (+X forward,
+    # +Z up) matches SAPIEN's camera convention, so CAMERA_ROT is used directly.
+    # focal_length 12.05 mm + 20.955 mm aperture → ~82deg FOV = squint's fovy.
+    # Resolution stays 224x224 (square, multiple of 14) — required by DINOv2.
     wrist_camera: TiledCameraCfg = TiledCameraCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/wrist_link/cam_marker/tip/wrist_cam",
+        prim_path="{ENV_REGEX_NS}/Robot/gripper_link/wrist_cam",
         update_period=0.0,
-        height=224, 
+        height=224,
         width=224,
         data_types=["rgb"],
         spawn=sim_utils.PinholeCameraCfg(
-            focal_length=24.0,
+            focal_length=12.05,
             focus_distance=400.0,
             horizontal_aperture=20.955,
-            clipping_range=(0.05, 5.0),
+            clipping_range=(0.01, 100.0),
         ),
         offset=TiledCameraCfg.OffsetCfg(
-                                        rot=(0.0, 0.0, 0.0, 1.0),  ## may need to be arranged
-                                        convention="ros"),
-        # offset=TiledCameraCfg.OffsetCfg(pos=CAMERA_POS,
-        #                                 rot=CAMERA_ROT,  ## may need to be arranged
-        #                                 convention="ros"),
+            pos=CAMERA_POS,
+            rot=CAMERA_ROT,
+            convention="world",
+        ),
     )
 
     # Gripper contact sensors — one per (gripper body) x (filter target).
@@ -426,12 +460,23 @@ class RewardsCfg:
     # --- place portion: staged Place reward — guide the cube to a position
     # over the bowl, then release it. Only the above-bowl and success stages
     # are used (the lift terms above replace the reach/grasp stages).
-    above_bin = RewTerm(func=mdp.place_stage_above_bin, weight=30.0, params=_ABOVE_BIN_PARAMS)
+    above_bin = RewTerm(func=mdp.place_stage_above_bin, weight=10.0, params=_ABOVE_BIN_PARAMS)
     success_bonus = RewTerm(func=mdp.place_stage_success, weight=80.0, params=_PLACE_PARAMS)
+
+    end_with_success  = RewTerm(
+        func=mdp.is_terminated_term,
+        weight=2000.0,
+        params={"term_keys": "success"},
+    )
 
     # --- penalties --------------------------------------------------------
     # #pen_touch_table = RewTerm(func=mdp.robot_touching_table, weight=-6.0)
-    pen_touch_bin = RewTerm(func=mdp.robot_touching_bin, weight=-7.0)
+    pen_touch_bin = RewTerm(func=mdp.robot_touching_bin, weight=-20.0)
+
+    # Penalty when the gripper points above the horizontal plane (toward the
+    # sky). Zero for any down/horizontal pose — only a skyward wrist is
+    # penalized, with no dense pull toward the ground. See mdp/rewards.py.
+    pen_ee_skyward = RewTerm(func=mdp.ee_pointing_up_penalty, weight=-10.0)
 
     # Dense per-step penalty: cube still on the table but shoved >4 cm from its
     # spawn position — discourages dragging the cube instead of lifting it.
@@ -551,3 +596,8 @@ class PickPlaceEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.physx.gpu_found_lost_aggregate_pairs_capacity = 1024 * 1024 * 4
         self.sim.physx.gpu_total_aggregate_pairs_capacity = 16 * 1024
         self.sim.physx.friction_correlation_distance = 0.00625
+        # GPU narrowphase contact buffer. The default (64 MB) overflows with
+        # 1024 envs once the convex-decomposition bowl mesh is in the scene —
+        # PhysX reported needing ~330 MB ("collisionStackSize buffer overflow,
+        # Contacts have been dropped"). 512 MB gives comfortable headroom.
+        self.sim.physx.gpu_collision_stack_size = 512 * 1024 * 1024
