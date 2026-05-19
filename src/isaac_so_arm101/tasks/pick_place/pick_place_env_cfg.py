@@ -478,6 +478,24 @@ class RewardsCfg:
     # penalized, with no dense pull toward the ground. See mdp/rewards.py.
     pen_ee_skyward = RewTerm(func=mdp.ee_pointing_up_penalty, weight=-10.0)
 
+    # Penalty for arm motion while the cube sits in the bowl placement zone
+    # (xy within BOWL_RADIUS, z in [0, rim_height + 0.01]). Pushes the arm to
+    # settle into the static pose the success predicate requires.
+    pen_move_when_placed = RewTerm(
+        func=mdp.robot_moving_when_placed,
+        weight=-10.0,
+        params={"bowl_radius": BOWL_RADIUS, "rim_height": BOWL_RIM_HEIGHT, "z_margin": 0},
+    )
+
+    # Reward for opening the gripper while the cube xy is within
+    # (BOWL_RADIUS - 0.005) of the bowl centre — encourages releasing the cube
+    # into the bowl. See mdp/rewards.py.
+    release_over_bowl = RewTerm(
+        func=mdp.open_gripper_over_bowl,
+        weight=5.0,
+        params={"bowl_radius": BOWL_RADIUS - 0.005},
+    )
+
     # Dense per-step penalty: cube still on the table but shoved >4 cm from its
     # spawn position — discourages dragging the cube instead of lifting it.
     # pen_cube_displaced = RewTerm(
@@ -516,13 +534,13 @@ class RewardsCfg:
     # debug_extremes = RewTerm(func=mdp.debug_extreme_values, weight=1.0)
 
     # --- regularizers (not part of upstream's dense reward) ----------------
-    # action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1e-4)
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1e-4)
 
-    # joint_vel = RewTerm(
-    #     func=mdp.joint_vel_l2,
-    #     weight=-1e-4,
-    #     params={"asset_cfg": SceneEntityCfg("robot")},
-    # )
+    joint_vel = RewTerm(
+        func=mdp.joint_vel_l2,
+        weight=-1e-4,
+        params={"asset_cfg": SceneEntityCfg("robot")},
+    )
 
 
 

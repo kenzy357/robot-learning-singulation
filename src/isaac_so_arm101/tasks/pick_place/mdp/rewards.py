@@ -660,6 +660,88 @@ def ee_pointing_up_penalty(
     return world_dir[:, 2].clamp(min=0.0)
 
 
+def robot_moving_when_placed(
+    env: "ManagerBasedRLEnv",
+    bowl_radius: float = 0.07,
+    rim_height: float = 0.053,
+    z_margin: float = 0.01,
+    vel_scale: float = 10.0,
+    gripper_joint_name: str = "gripper",
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    cube_cfg: SceneEntityCfg = SceneEntityCfg("block"),
+    bowl_cfg: SceneEntityCfg = SceneEntityCfg("bowl"),
+) -> torch.Tensor:
+    """Penalty in ``[0, 1]`` for arm motion while the cube sits in the bowl
+    placement zone; ``0`` everywhere else.
+
+    The cube is "in place" when its xy is within ``bowl_radius`` of the bowl
+    centre AND its height above the bowl origin (bowl bottom-centre) is in
+    ``[0, rim_height + z_margin]`` — i.e. resting in / just above the bowl, not
+    held high over it. Inside that zone the penalty magnitude is
+    ``tanh(vel_scale * arm_joint_vel_norm)`` (the gripper joint is excluded),
+    mirroring the staged reward's ``static_robot_reward = 1 - tanh(...)``.
+
+    Outside the zone the term is exactly ``0`` — reaching, lifting and
+    transporting the cube are never penalized. Use with a negative weight to
+    push the arm to settle once the cube is placed, matching the
+    ``is_robot_static`` half of the ``place_success`` predicate.
+    """
+    cube: RigidObject = env.scene[cube_cfg.name]
+    bowl: RigidObject = env.scene[bowl_cfg.name]
+    robot: Articulation = env.scene[robot_cfg.name]
+
+    xy_dist = torch.norm(
+        cube.data.root_pos_w[:, :2] - bowl.data.root_pos_w[:, :2], dim=-1
+    )
+    cube_z_rel = cube.data.root_pos_w[:, 2] - bowl.data.root_pos_w[:, 2]
+    in_place = (
+        (xy_dist <= bowl_radius)
+        & (cube_z_rel >= 0.0)
+        & (cube_z_rel <= rim_height + z_margin)
+    )
+
+    gripper_idx = robot.data.joint_names.index(gripper_joint_name)
+    arm_idx = [i for i in range(robot.data.joint_vel.shape[-1]) if i != gripper_idx]
+    robot_v = torch.norm(robot.data.joint_vel[:, arm_idx], dim=-1)
+
+    return in_place.float() * torch.tanh(vel_scale * robot_v)
+
+
+def open_gripper_over_bowl(
+    env: "ManagerBasedRLEnv",
+    bowl_radius: float = 0.065,
+    gripper_joint_name: str = "gripper",
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    cube_cfg: SceneEntityCfg = SceneEntityCfg("block"),
+    bowl_cfg: SceneEntityCfg = SceneEntityCfg("bowl"),
+) -> torch.Tensor:
+    """Reward in ``[0, 1]`` for opening the gripper while the cube is over the
+    bowl — encourages releasing the cube into the bowl.
+
+    Fires only when the cube xy is within ``bowl_radius`` of the bowl centre;
+    ``0`` outside, so the gripper is never pushed open during reach/grasp/
+    transport. Inside the zone the magnitude is the gripper openness in
+    ``[0, 1]`` (``0`` fully closed, ``1`` fully open) — the same normalized
+    openness the staged Place reward uses. Use with a positive weight.
+    """
+    cube: RigidObject = env.scene[cube_cfg.name]
+    bowl: RigidObject = env.scene[bowl_cfg.name]
+    robot: Articulation = env.scene[robot_cfg.name]
+
+    xy_dist = torch.norm(
+        cube.data.root_pos_w[:, :2] - bowl.data.root_pos_w[:, :2], dim=-1
+    )
+    in_zone = xy_dist <= bowl_radius
+
+    g_idx = robot.data.joint_names.index(gripper_joint_name)
+    g_pos = robot.data.joint_pos[:, g_idx]
+    g_lo = robot.data.soft_joint_pos_limits[:, g_idx, 0]
+    g_hi = robot.data.soft_joint_pos_limits[:, g_idx, 1]
+    openness = ((g_pos - g_lo) / (g_hi - g_lo + 1e-8)).clamp(0.0, 1.0)
+
+    return in_zone.float() * openness
+
+
 # ---------------------------------------------------------------------------
 # Lift-task reward terms — exact port of ``tasks/lift/mdp/rewards.py``
 # (``object_ee_distance`` / ``object_is_lifted``). The function bodies are
