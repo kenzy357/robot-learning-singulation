@@ -496,6 +496,20 @@ class RewardsCfg:
     #     params={"bowl_radius": BOWL_RADIUS - 0.005},
     # )
 
+    # Big reward for holding the arm STILL once the cube is in the bowl
+    # placement zone (xy within BOWL_RADIUS, z in [0, rim_height]) — a still
+    # arm with the cube placed is the success pose, so this rewards respecting
+    # the success conditions. See mdp/rewards.py.
+    static_when_placed = RewTerm(
+        func=mdp.robot_static_when_placed,
+        weight=50.0,
+        params={"bowl_radius": BOWL_RADIUS, "rim_height": BOWL_RIM_HEIGHT, "z_margin": 0},
+    )
+
+    # Flat time penalty — a constant cost every step, so the policy is pushed
+    # to reach an episode-ending state (ideally success) as fast as possible.
+    pen_time = RewTerm(func=mdp.step_penalty, weight=-0.001)
+
     # Dense per-step penalty: cube still on the table but shoved >4 cm from its
     # spawn position — discourages dragging the cube instead of lifting it.
     # pen_cube_displaced = RewTerm(
@@ -534,11 +548,11 @@ class RewardsCfg:
     # debug_extremes = RewTerm(func=mdp.debug_extreme_values, weight=1.0)
 
     # --- regularizers (not part of upstream's dense reward) ----------------
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1e-4)
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1e-6)
 
     joint_vel = RewTerm(
         func=mdp.joint_vel_l2,
-        weight=-1e-4,
+        weight=-1e-6,
         params={"asset_cfg": SceneEntityCfg("robot")},
     )
 

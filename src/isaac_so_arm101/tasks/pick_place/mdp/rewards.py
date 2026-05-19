@@ -714,6 +714,51 @@ def robot_moving_when_placed(
     return in_place.float() * torch.tanh(vel_scale * robot_v)
 
 
+def robot_static_when_placed(
+    env: "ManagerBasedRLEnv",
+    bowl_radius: float = 0.07,
+    rim_height: float = 0.053,
+    z_margin: float = 0.0,
+    vel_scale: float = 10.0,
+    gripper_joint_name: str = "gripper",
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    cube_cfg: SceneEntityCfg = SceneEntityCfg("block"),
+    bowl_cfg: SceneEntityCfg = SceneEntityCfg("bowl"),
+) -> torch.Tensor:
+    """Reward in ``[0, 1]`` for holding the arm STILL while the cube sits in
+    the bowl placement zone; ``0`` everywhere else.
+
+    The exact mirror of ``robot_moving_when_placed``: same "in place" zone
+    (cube xy within ``bowl_radius`` of the bowl centre AND cube height in
+    ``[0, rim_height + z_margin]``), but the magnitude is
+    ``1 - tanh(vel_scale * arm_joint_vel_norm)`` (gripper joint excluded) — it
+    is ``1`` when the arm is frozen and decays as it moves. Together,
+    ``robot_moving_when_placed`` + ``robot_static_when_placed`` sum to the
+    ``in_place`` indicator.
+
+    A still arm with the cube placed is exactly the ``is_robot_static`` half of
+    the ``place_success`` predicate — use with a large positive weight to make
+    settling into the success pose strongly rewarded.
+    """
+    cube: RigidObject = env.scene[cube_cfg.name]
+    bowl: RigidObject = env.scene[bowl_cfg.name]
+    robot: Articulation = env.scene[robot_cfg.name]
+
+    xy_dist = torch.norm(
+        cube.data.root_pos_w[:, :2] - bowl.data.root_pos_w[:, :2], dim=-1
+    )
+    cube_z = cube.data.root_pos_w[:, 2]
+    in_place = (
+        (xy_dist <= bowl_radius)
+        & (cube_z >= 0.0)
+        & (cube_z <= rim_height + z_margin)
+    )
+
+    gripper_idx = robot.data.joint_names.index(gripper_joint_name)
+    arm_idx = [i for i in range(robot.data.joint_vel.shape[-1]) if i != gripper_idx]
+    robot_v = torch.norm(robot.data.joint_vel[:, arm_idx], dim=-1)
+
+    return in_place.float() * (1.0 - torch.tanh(vel_scale * robot_v))
 
 
 def open_gripper_over_bowl(
@@ -749,6 +794,19 @@ def open_gripper_over_bowl(
     openness = ((g_pos - g_lo) / (g_hi - g_lo + 1e-8)).clamp(0.0, 1.0)
 
     return in_zone.float() * openness
+
+
+def step_penalty(env: "ManagerBasedRLEnv") -> torch.Tensor:
+    """Constant ``1.0`` per env every step — a flat time penalty.
+
+    Used with a NEGATIVE weight, every extra step costs reward, so the policy
+    is pushed to reach an episode-ending state as fast as possible. NOTE: this
+    rewards ending the episode by ANY termination, including ``block_dropped``
+    — keep the weight small relative to the ``success`` bonuses (and large
+    enough drop penalty) so a fast genuine success, not a fast failure, stays
+    the optimal way out.
+    """
+    return torch.ones(env.num_envs, device=env.device)
 
 
 # ---------------------------------------------------------------------------
