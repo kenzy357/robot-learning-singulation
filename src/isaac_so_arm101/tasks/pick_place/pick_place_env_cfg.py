@@ -465,36 +465,36 @@ class RewardsCfg:
 
     end_with_success  = RewTerm(
         func=mdp.is_terminated_term,
-        weight=2000.0,
+        weight=30000.0,
         params={"term_keys": "success"},
     )
 
     # --- penalties --------------------------------------------------------
     # #pen_touch_table = RewTerm(func=mdp.robot_touching_table, weight=-6.0)
-    pen_touch_bin = RewTerm(func=mdp.robot_touching_bin, weight=-20.0)
+    pen_touch_bin = RewTerm(func=mdp.robot_touching_bin, weight=-5.0)
 
     # Penalty when the gripper points above the horizontal plane (toward the
     # sky). Zero for any down/horizontal pose — only a skyward wrist is
     # penalized, with no dense pull toward the ground. See mdp/rewards.py.
-    pen_ee_skyward = RewTerm(func=mdp.ee_pointing_up_penalty, weight=-10.0)
+    pen_ee_skyward = RewTerm(func=mdp.ee_pointing_up_penalty, weight=-4.0)
 
     # Penalty for arm motion while the cube sits in the bowl placement zone
     # (xy within BOWL_RADIUS, z in [0, rim_height + 0.01]). Pushes the arm to
     # settle into the static pose the success predicate requires.
-    pen_move_when_placed = RewTerm(
-        func=mdp.robot_moving_when_placed,
-        weight=-10.0,
-        params={"bowl_radius": BOWL_RADIUS, "rim_height": BOWL_RIM_HEIGHT, "z_margin": 0},
-    )
+    # pen_move_when_placed = RewTerm(
+    #     func=mdp.robot_moving_when_placed,
+    #     weight=-10.0,
+    #     params={"bowl_radius": BOWL_RADIUS, "rim_height": BOWL_RIM_HEIGHT, "z_margin": 0},
+    # )
 
     # Reward for opening the gripper while the cube xy is within
     # (BOWL_RADIUS - 0.005) of the bowl centre — encourages releasing the cube
     # into the bowl. See mdp/rewards.py.
-    release_over_bowl = RewTerm(
-        func=mdp.open_gripper_over_bowl,
-        weight=5.0,
-        params={"bowl_radius": BOWL_RADIUS - 0.005},
-    )
+    # release_over_bowl = RewTerm(
+    #     func=mdp.open_gripper_over_bowl,
+    #     weight=5.0,
+    #     params={"bowl_radius": BOWL_RADIUS - 0.005},
+    # )
 
     # Dense per-step penalty: cube still on the table but shoved >4 cm from its
     # spawn position — discourages dragging the cube instead of lifting it.
@@ -565,6 +565,7 @@ class TerminationsCfg:
             "cube_cfg": SceneEntityCfg("block"),
             "bowl_cfg": SceneEntityCfg("bowl"),
             "robot_cfg": SceneEntityCfg("robot"),
+            "rim_height": BOWL_RIM_HEIGHT,
         },
     )
 

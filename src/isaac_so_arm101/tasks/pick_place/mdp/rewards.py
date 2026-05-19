@@ -342,6 +342,8 @@ def place_success(
     robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     cube_cfg: SceneEntityCfg = SceneEntityCfg("block"),
     bowl_cfg: SceneEntityCfg = SceneEntityCfg("bowl"),
+    rim_height: float=0.05,
+    z_margin: float=0.0,
 ) -> torch.Tensor:
     """Squint ``Place`` success predicate (``evaluate``'s ``success``):
 
@@ -371,6 +373,11 @@ def place_success(
     arm_idx = [i for i in range(robot.data.joint_vel.shape[-1]) if i != gripper_idx]
     robot_v = torch.norm(robot.data.joint_vel[:, arm_idx], dim=-1)
     is_robot_static = robot_v <= robot_static_threshold
+
+    cube_z = cube.data.root_pos_w[:, 2]
+    is_z = (cube_z >= 0.0) & (cube_z <= rim_height + z_margin)
+
+    #return is_z & is_item_above_bin & (~touching_item) & (~touching_bin) # without the stop mvmt and with the z condition
 
     return is_item_above_bin & (~touching_item) & is_robot_static & (~touching_bin)
 
@@ -693,11 +700,11 @@ def robot_moving_when_placed(
     xy_dist = torch.norm(
         cube.data.root_pos_w[:, :2] - bowl.data.root_pos_w[:, :2], dim=-1
     )
-    cube_z_rel = cube.data.root_pos_w[:, 2] - bowl.data.root_pos_w[:, 2]
+    cube_z = cube.data.root_pos_w[:, 2]
     in_place = (
         (xy_dist <= bowl_radius)
-        & (cube_z_rel >= 0.0)
-        & (cube_z_rel <= rim_height + z_margin)
+        & (cube_z >= 0.0)
+        & (cube_z <= rim_height + z_margin)
     )
 
     gripper_idx = robot.data.joint_names.index(gripper_joint_name)
@@ -705,6 +712,8 @@ def robot_moving_when_placed(
     robot_v = torch.norm(robot.data.joint_vel[:, arm_idx], dim=-1)
 
     return in_place.float() * torch.tanh(vel_scale * robot_v)
+
+
 
 
 def open_gripper_over_bowl(
